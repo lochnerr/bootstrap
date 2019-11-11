@@ -1,0 +1,17 @@
+[Unit]
+Description=Xen Host Startup Service
+#Requires=proc-xen.mount
+Before=xenconsoled.service
+After=lvm2-monitor.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=true
+ExecStart=/usr/local/bin/bootstrap-startup
+#ExecReload=/usr/local/bin/bootstrap-reload
+ExecStop=/usr/local/bin/bootstrap-shutdown
+
+##StandardOutput=journal
+
+[Install]
+WantedBy=multi-user.target

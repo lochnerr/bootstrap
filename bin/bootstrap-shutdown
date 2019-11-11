@@ -1,0 +1,22 @@
+#!/bin/sh
+
+# The log directory
+LOG="/tmp/bootstrap.log"
+
+log() {
+  echo "$1" >>$LOG
+}
+
+# Execute the shutdown script.
+if [ -x /tmp/bootstrap/shutdown ]; then
+  log "Executing shutdown script."
+  /tmp/bootstrap/shutdown >>$LOG
+  log "shutdown script finished."
+elif [ -x /tmp/bootstrap/stop ]; then
+  log "Executing stop script."
+  /tmp/bootstrap/stop >>$LOG
+  log "stop script finished."
+else
+  log "Not using shutdown script."
+fi
+
