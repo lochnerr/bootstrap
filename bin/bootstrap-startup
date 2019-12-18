@@ -1,0 +1,298 @@
+#!/bin/sh
+
+# /usr/local/bin/bootstrap-startup
+
+set -xe
+
+# This script is designed to allow automated startup of generic linux images.
+
+# Typically, in a bare-metal environment, the image will be a custom run-from-ram 
+# or live image booted from a usb stick (or DVD or pxe).  The default boot 
+# configuration is xen, but a non-xen boot menu option will also be available.
+
+# In a VM environment, the image will be based on a cloud-init image booted from
+# a virtual disk volume with a corresponding cloud-init iso cdrom.
+
+# These generic linux images can be upgraded simply by replacing the bootstrap 
+# images with a newer versions.  Even release upgrades are trivial.
+
+# The bootstrap process does the following on startup:
+
+# Searches for a bootstrap device.
+# Mounts the bootstrap device on /mnt.
+# Copies /mnt/bootstrap files to /tmp/bootstrap.
+# Unmounts /mnt.
+# Sets up networking (based on the bootstrap files).
+# Starts/restarts networking.
+# If running in xen dom0, starts the xen processes (xenstored, xenconsoled, etc).
+# If there is a /tmp/bootstrap/startup or /tmp/bootstrap/start script from the bootstrap volume, execute it.
+
+# Note. If no bootstrap device is found, the process does the following instead:
+# Starts/restarts default networking.
+# If running in xen dom0, starts the xen processes (xenstored, xenconsoled, etc).
+
+# On shutdown:
+
+# Remounts the bootstrap device on /mnt.
+# Copies network changes back to the bootstrap device for persistence.
+# Unmounts /mnt.
+# If there is a /tmp/bootstrap/shutdown or /tmp/bootstrap/stop script from the bootstrap volume, execute it.
+
+# The bootstrap environment must be identified: bare metal or virtual. This
+# determines the bootstrap search order.
+
+# If running in a dom0, it is bare metal.
+# If running in a domU, it is virtual.
+# If /dev/vdX devices exist, it is virtual (kvm).
+# Otherwise, assume bare metal.
+
+# The search order for virtual is:
+# xen: /dev/xvdX devices.
+# kvm: /dev/vdX devices.
+
+# The search order for bare metal is:
+# 1) /dev/vmh01/btrfs_a (backward compatibility).
+# 2) lvm2 partitions containing 'bootstrap' in their name.
+# 3) /dev/sdX devices.
+# 4) all other lvm2 partitions.
+
+# A match is found when the device is mounted on /mnt and
+# there is a /mnt/bootstrap directory.
+
+# The log directory
+LOG="/tmp/bootstrap.log"
+
+log() {
+  echo "$1" >>$LOG
+}
+
+try_device() {
+  [ -z "$1" ] && return
+  log "Device: $1"
+  local blkid="$(blkid $1 || :)"
+  for column in $blkid ; do
+    # Look only at the file system type value.
+    if [ "${column:0:5}" = "TYPE=" ]; then
+      # Is the file system of the right type?
+      for fs_type in btrfs ext4 vfat xfs ext3 ; do
+        if [ "$(echo $column | grep $fs_type || :)" ]; then
+          log "Trying device: $1 ($fs_type)"
+          if mount -v -t $fs_type $1 /mnt >/dev/null ; then
+            if [ -d /mnt/bootstrap ]; then
+              cp -a /mnt/bootstrap /tmp
+              # Create mount script for use in shutdown (to persist network changes)."
+              echo "#!/bin/sh" >/tmp/mount-bootstrap
+              echo "mnt=\${1:-/mnt}" >>/tmp/mount-bootstrap
+              echo "mount -v -t $fs_type $1 \$mnt" >>/tmp/mount-bootstrap
+              chmod +x /tmp/mount-bootstrap
+              # Indicate success.
+              log "Success"
+              echo "$1"
+            fi
+            umount /mnt || :
+          fi
+          # Have tried (successfully or unsuccessfully) to mount the device, so return.
+          return
+        fi
+      done
+    fi
+  done
+}
+
+try_device_node() {
+  for dev in $(ls /dev/${1}*); do
+    local rv=$(try_device $dev)
+    if [ ! -z "$rv" ]; then
+      echo "$rv"
+      break
+    fi
+  done
+}
+
+process_lv() {
+  while (( "$#" )); do
+    local vg=$1
+    local lv=$2
+    #attr=$3
+    shift 3
+    local rv=$(try_device "/dev/$vg/$lv")
+    if [ ! -z "$rv" ]; then
+      echo "$rv"
+      break
+    fi
+  done
+}
+
+try_lvs() {
+  msg="Trying logical volumes named '$1'."
+  [ -z "$1" ] && msg="Trying all logical volumes."
+  log "$msg"
+  if [ ! -z "$(command -v lvs 2> /dev/null)" ]; then
+    local scan=$(lvs --noheadings -o vg_name,lv_name,lv_attr -S "lv_name =~ .*${1}.* && lv_attr =~ -w.-a-.*")
+    local rv=$(process_lv $scan)
+    echo $rv
+  fi
+}
+
+METAL=""
+do_bare_metal() {
+  local r
+  log "Bare Metal $1"
+  rv="$(try_device /dev/vmh01/btrfs_a)"
+  [ -z "$rv" ] && rv="$(try_lvs bootstrap)"
+  [ -z "$rv" ] && rv="$(try_device_node sd)"
+  [ -z "$rv" ] && rv="$(try_lvs)"
+  log "rv = $rv"
+  METAL="True"
+}
+
+find_and_copy_bootstrap_files() {
+  if [ -f /proc/xen/capabilities ]; then
+    if [ ! -z "$(cat /proc/xen/capabilities)" ]; then
+      do_bare_metal dom0
+    else
+      log "VM domU xvd"
+      try_device_node xvd
+    fi
+  elif [ ! -z "$(ls /dev/vd* 2>/dev/null)" ]; then
+    log "VM kvm vd"
+    try_device_node vd
+  else
+    do_bare_metal kernel
+  fi
+}
+
+# Delete files prior to search.
+rm -rf /tmp/bootstrap
+rm -f /tmp/mount-bootstrap
+rm -f /tmp/bootstrap.log
+
+# Sometimes this process starts early and the disks and/or lvms aren't ready, so this is tried 5 times.
+for i in 1 2 3 4 5; do
+  if [ ! -z "$(find_and_copy_bootstrap_files)" ]; then
+    log "Bootstrap files successfully copied."
+    break
+  else
+    log "Retrying bootstrap mount."
+    sleep 5s
+  fi
+done
+
+# Persist mount?
+if [ -e /tmp/bootstrap/mount-srv ]; then
+  if [ -x /tmp/mount-bootstrap ]; then
+    /tmp/mount-bootstrap
+  fi
+fi
+
+if [ -d /srv/local/bin ]; then
+  PATH=${PATH}:/srv/local/bin
+fi
+
+if [ -d /srv/root ]; then 
+  log "Mounting persistent root."
+  mount --bind /srv/root      /root
+fi
+
+if [ -d /srv/home ]; then 
+  log "Mounting persistent home."
+  mount --bind /srv/home      /home
+fi
+
+# Start xen processes, if dom0.
+if [ -f /proc/xen/capabilities ]; then
+  if [ ! -z "$(cat /proc/xen/capabilities)" ]; then
+    log "Mounting persistent xen/libvirt volumes."
+    [ -d /srv/var/lib/xen ] && mount --bind /srv/var/lib/xen      /var/lib/xen
+    [ -d /srv/var/log/xen ] && mount --bind /srv/var/log/xen      /var/log/xen
+    [ -d /srv/etc/libvirt ] && mount --bind /srv/etc/libvirt      /etc/libvirt
+    [ -d /srv/var/lib/libvirt ] && mount --bind /srv/var/lib/libvirt  /var/lib/libvirt
+    [ -d /srv/var/log/libvirt ] && mount --bind /srv/var/log/libvirt  /var/log/libvirt
+    if [ ! -z "$(command -v systemctl 2> /dev/null)" ]; then
+      log "Starting xen processes."
+      systemctl start xenstored
+      systemctl start xenconsoled
+      sleep 1s
+    else
+      log "Unsupported xen configuration."
+    fi
+  fi
+else
+  # No proc/xen/capabilities so must be VM or kvm.
+  log "Mounting persistent libvirt volumes."
+  [ -d /srv/etc/libvirt ] && mount --bind /srv/etc/libvirt      /etc/libvirt
+  [ -d /srv/var/lib/libvirt-kvm ] && mount --bind /srv/var/lib/libvirt-kvm  /var/lib/libvirt
+  [ -d /srv/var/log/libvirt-kvm ] && mount --bind /srv/var/log/libvirt-kvm  /var/log/libvirt
+fi
+
+# TODO This has to happen after libvirt directory is bind mounted.
+if [ ! -z "$(command -v libvirtd 2> /dev/null)" ]; then
+  log "Starting libvirtd."
+  if [ ! -z "$(command -v systemctl 2> /dev/null)" ]; then
+    systemctl start libvirtd
+  else
+    # TODO Not tested.
+    /etc/init.d/libvirtd start
+  fi
+fi
+
+# Copy network scripts.
+if [ -f /tmp/bootstrap/skip-network ]; then
+  log "Skipping network configuration."
+elif [ -d /tmp/bootstrap/network-scripts ]; then
+  log "Copying network scripts."
+  # Remove all but the loopback device scripts
+  [ -f /etc/sysconfig/network-scripts/ifcfg-lo ] && mv /etc/sysconfig/network-scripts/ifcfg-lo /etc/sysconfig/network-scripts/ifcfx-lo
+  rm -f /etc/sysconfig/network-scripts/ifcfg-*
+  [ -f /etc/sysconfig/network-scripts/ifcfx-lo ] && mv /etc/sysconfig/network-scripts/ifcfx-lo /etc/sysconfig/network-scripts/ifcfg-lo
+  cp -a /tmp/bootstrap/network-scripts/* /etc/sysconfig/network-scripts
+elif [ -f /tmp/bootstrap/network/interfaces ]; then
+  log "Copying network interfaces."
+  cp -a /tmp/bootstrap/network/interfaces /etc/network/interfaces
+else
+  log "No network configuration files."
+fi
+
+# Networking delay.
+DELAY="15s"
+
+# Start/restart networking.
+if [ -f /tmp/bootstrap/skip-network ]; then
+  log "Skipping network restart."
+elif [ -d /tmp/bootstrap/network-scripts ]; then
+  # centos/redhat/fedora
+  log "Restarting NetworkManager (Redhat/Fedora/Centos)"
+  systemctl restart NetworkManager
+  sleep $DELAY
+elif [ -e /tmp/bootstrap/network/interfaces ]; then
+  if [ ! -z "$(command -v systemctl 2> /dev/null)" ]; then
+    # TODO Don't know how NetworkManager in Ubuntu/Debian stores persistent entries across boots...
+    # May not be /network/interfaces.
+    # /etc/NetworkManager/connections?
+    log "Starting networking (Debian/Ubuntu)"
+    systemctl restart NetworkManager
+    sleep $DELAY
+  else
+    log "Restarting network (Alpine/Other)."
+    /etc/init.d/networking restart
+    sleep $DELAY
+  fi
+else
+  log "Not configuring network."
+fi
+
+# Execute the startup script.
+if [ -x /tmp/bootstrap/startup ]; then
+  log "Executing startup script."
+  /tmp/bootstrap/startup >>$LOG
+  log "startup script finished."
+elif [ -x /tmp/bootstrap/start ]; then
+  log "Executing start script."
+  /tmp/bootstrap/start >>$LOG
+  log "start script finished."
+else
+  log "Not using startup script."
+fi
+
+log "Done!"
+
