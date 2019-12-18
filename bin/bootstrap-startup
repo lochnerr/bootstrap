@@ -24,7 +24,7 @@ set -xe
 # Unmounts /mnt.
 # Sets up networking (based on the bootstrap files).
 # Starts/restarts networking.
-# If running in xen dom0, starts the xen processes (xenstored, xenconsoled, etc).
+# If running in xen dom0, starts the xen processes (xenconsoled, etc).
 # If there is a /tmp/bootstrap/startup or /tmp/bootstrap/start script from the bootstrap volume, execute it.
 
 # Note. If no bootstrap device is found, the process does the following instead:
@@ -115,6 +115,17 @@ process_lv() {
     local lv=$2
     #attr=$3
     shift 3
+    for i in 1 2 3 4 5 ; do
+      local lv_attr="$(lvs $vg/$lv --noheadings -o lv_attr)"
+      if [ "${lv_attr:6:1}" = "a" ]; then
+        break
+      elif [ "${lv_attr:6:1}" = "-" ]; then
+        log "Waiting for logical volume $vg/$lv to become active:${lv_attr}."
+        sleep 10s
+      else
+        log "Volume $vg/$lv bad attributes:${lv_attr}."
+      fi
+    done
     local rv=$(try_device "/dev/$vg/$lv")
     if [ ! -z "$rv" ]; then
       echo "$rv"
@@ -128,22 +139,21 @@ try_lvs() {
   [ -z "$1" ] && msg="Trying all logical volumes."
   log "$msg"
   if [ ! -z "$(command -v lvs 2> /dev/null)" ]; then
-    local scan=$(lvs --noheadings -o vg_name,lv_name,lv_attr -S "lv_name =~ .*${1}.* && lv_attr =~ -w.-a-.*")
+    local scan=$(lvs --noheadings -o vg_name,lv_name,lv_attr -S "lv_name =~ .*${1}.* && lv_attr =~ -w.-.-.*")
     local rv=$(process_lv $scan)
     echo $rv
   fi
 }
 
-METAL=""
 do_bare_metal() {
-  local r
+  local rv
   log "Bare Metal $1"
-  rv="$(try_device /dev/vmh01/btrfs_a)"
+  #rv="$(try_device /dev/vmh01/btrfs_a)"
   [ -z "$rv" ] && rv="$(try_lvs bootstrap)"
   [ -z "$rv" ] && rv="$(try_device_node sd)"
   [ -z "$rv" ] && rv="$(try_lvs)"
   log "rv = $rv"
-  METAL="True"
+  echo "$rv"
 }
 
 find_and_copy_bootstrap_files() {
@@ -167,6 +177,8 @@ rm -rf /tmp/bootstrap
 rm -f /tmp/mount-bootstrap
 rm -f /tmp/bootstrap.log
 
+# TODO Delete this...
+if [ "1" = "2" ]; then
 # Sometimes this process starts early and the disks and/or lvms aren't ready, so this is tried 5 times.
 for i in 1 2 3 4 5; do
   if [ ! -z "$(find_and_copy_bootstrap_files)" ]; then
@@ -177,11 +189,18 @@ for i in 1 2 3 4 5; do
     sleep 5s
   fi
 done
+fi
+
+if [ ! -z "$(find_and_copy_bootstrap_files)" ]; then
+  log "Bootstrap files successfully copied."
+else
+  log "Bootstrap files not copied."
+fi
 
 # Persist mount?
 if [ -e /tmp/bootstrap/mount-srv ]; then
   if [ -x /tmp/mount-bootstrap ]; then
-    /tmp/mount-bootstrap
+    /tmp/mount-bootstrap /srv
   fi
 fi
 
@@ -191,11 +210,13 @@ fi
 
 if [ -d /srv/root ]; then 
   log "Mounting persistent root."
+  umount /root || :
   mount --bind /srv/root      /root
 fi
 
 if [ -d /srv/home ]; then 
   log "Mounting persistent home."
+  umount /home || :
   mount --bind /srv/home      /home
 fi
 
@@ -210,22 +231,24 @@ if [ -f /proc/xen/capabilities ]; then
     [ -d /srv/var/log/libvirt ] && mount --bind /srv/var/log/libvirt  /var/log/libvirt
     if [ ! -z "$(command -v systemctl 2> /dev/null)" ]; then
       log "Starting xen processes."
-      systemctl start xenstored
       systemctl start xenconsoled
       sleep 1s
     else
+      # TODO Fix this for Alpine & Debian variants.
       log "Unsupported xen configuration."
     fi
   fi
 else
   # No proc/xen/capabilities so must be VM or kvm.
-  log "Mounting persistent libvirt volumes."
-  [ -d /srv/etc/libvirt ] && mount --bind /srv/etc/libvirt      /etc/libvirt
-  [ -d /srv/var/lib/libvirt-kvm ] && mount --bind /srv/var/lib/libvirt-kvm  /var/lib/libvirt
-  [ -d /srv/var/log/libvirt-kvm ] && mount --bind /srv/var/log/libvirt-kvm  /var/log/libvirt
+  if [ -d /srv/etc/libvirt ]; then
+    log "Mounting persistent libvirt volumes."
+    mount --bind /srv/etc/libvirt      /etc/libvirt
+    [ -d /srv/var/lib/libvirt-kvm ] && mount --bind /srv/var/lib/libvirt-kvm  /var/lib/libvirt
+    [ -d /srv/var/log/libvirt-kvm ] && mount --bind /srv/var/log/libvirt-kvm  /var/log/libvirt
+  fi
 fi
 
-# TODO This has to happen after libvirt directory is bind mounted.
+# Start the libvirtd, if it exists on the boot device.
 if [ ! -z "$(command -v libvirtd 2> /dev/null)" ]; then
   log "Starting libvirtd."
   if [ ! -z "$(command -v systemctl 2> /dev/null)" ]; then
@@ -295,4 +318,5 @@ else
 fi
 
 log "Done!"
+echo "Bootstrap startup completed!"
 
