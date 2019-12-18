@@ -6,16 +6,11 @@ set -e
 
 # This script is designed to allow automated startup of generic linux images.
 
-# Typically, in a bare-metal environment, the image will be a custom live (run-from-ram)
-# image booted from a usb stick (or DVD or even pxe).  The default boot configuration
-# is xen, but a non-xen boot menu option will also be available.
+# In a bare-metal environment, the image would typically be a custom live (run-from-ram)
+# image booted from a usb stick or DVD or even via pxe.
 
-# In a VM environment, the image will be based on either a cloud-init image booted from
-# a virtual disk volume with a corresponding cloud-init iso cdrom or a live (run-from-ram)
-# alpine iso.
-
-# These generic linux images can be upgraded simply by replacing the bootstrap 
-# images with a newer versions.  Even release upgrades are trivial.
+# In a VM environment, the image would be a cloud-init image booted from a virtual disk volume
+# with a corresponding cloud-init cidata volume or a live alpine bootstrap iso.
 
 # The bootstrap process does the following on startup:
 
@@ -23,36 +18,24 @@ set -e
 # Mounts the bootstrap device on /mnt.
 # Copies /mnt/bootstrap files to /tmp/bootstrap.
 # Unmounts /mnt.
+# Mount persistent /srv directory, unless not required.
+# Add /srv/local/bin to path, if it exists.
+# Mount persistent root.
+# Mount persistent home.
+# Copy ssh identifiers.
+# Setup persistent apk cache for alpine.
+# TODO Local admin password???
+# Stop the libvirtd, if it exists on the boot device.
+# Bind xen and libvirt directories (if needed).
 # Sets up networking (based on the bootstrap files).
-# Starts/restarts networking.
-# If running in xen dom0, starts the xen processes (xenconsoled, etc).
+# Restarts networking, if required.
+# Start the libvirtd, if it exists on the boot device.
 # If there is a /tmp/bootstrap/startup or /tmp/bootstrap/start script from the bootstrap volume, execute it.
 
 # Note. If no bootstrap device is found, the process does the following instead:
-# Starts/restarts default networking.
-# If running in xen dom0, starts the xen processes (xenstored, xenconsoled, etc).
 
-###
-# As of 2018-10-01...
-# Needed by: b-bare, v-virt & d-driver
-# bvd Deletes existing /tmp/bootstrap files prior to searching for them on external volumes.
-# bvd If alpine, load btrfs module.
-# bvd Find and copy bootstrap files.
-# bv. Mount persistent /srv directory, unless not required.
-# bvd Add /srv/local/bin to path, if it exists.
-# bvd Mount persistent root.
-# bvd Mount persistent home.
-# bvd Copy ssh identifiers.
-# bv. Setup persistent apk cache for alpine.
-#       Makes sense for bare/virt because both might install packages in startup...
-# ??d TODO Local admin password???
-# b.. Stop the libvirtd, if it exists on the boot device.
-# b.. Start xen processes (if dom0) and bind libvirt directories (if needed).
-# bvd Copy network scripts.
-# bvd Start/restart networking.
-# b.. Start the libvirtd, if it exists on the boot device.
-# bvd Execute the startup script.
-###
+# Start the libvirtd, if it exists on the boot device.
+# Execute the startup script.
 
 # On shutdown:
 
@@ -84,6 +67,7 @@ set -e
 
 # The log directory
 LOG="/tmp/bootstrap.log"
+LOG="${LOG:-/dev/stdout}"
 
 [ "$1" = "test" ] && test="true"
 
@@ -94,16 +78,14 @@ log() {
 }
 
 try_device() {
-  MOUNT_FAILED=""
   [ -z "$1" ] && return
-  log "Device: $1"
-  local blkid="$(blkid $1 || :)"
-  for column in $blkid ; do
-    # Look only at the file system type value.
-    if [ "${column:0:5}" = "TYPE=" ]; then
-      # Is the file system of the right type?
-      for fs_type in btrfs ext4 vfat xfs ext3 ; do
-        if echo $column | grep -q $fs_type; then
+  local rc="1"
+  local blkid
+  blkid="$(blkid -s TYPE $1 || :)"
+  local fs_type
+  fs_type=$(echo $blkid | cut -d '"' -f2)
+  if [ -n "$fs_type" ]; then
+      if echo 'btrfs ext4 vfat xfs ext3 ext2' | grep "$fs_type" >/dev/null 2>&1 ; then
           log "Trying device: $1 ($fs_type)"
           if mount -v -t $fs_type $1 /mnt >/dev/null; then
             if [ -d /mnt/bootstrap ]; then
@@ -116,32 +98,30 @@ try_device() {
               chmod +x /tmp/mount-bootstrap
               # Indicate success.
               log "Found bootstrap directory on device."
-              echo "$1"
+              rc="0"
             else
               log "No bootstrap directory on device."
             fi
             umount /mnt || :
           else
-            MOUNT_FAILED="true"
             log "Device mount failed."
           fi
-          # Have tried (successfully or unsuccessfully) to mount the device, so return.
-          return
-        fi
-      done
-    fi
-  done
+      else
+        log "Not trying device: $1 ($fs_type)"
+      fi
+  fi
+  return $rc
 }
 
 try_device_node() {
   log "Trying devices in /dev/${1}*."
   for dev in $(ls /dev/${1}* 2>/dev/null); do
-    local rv=$(try_device $dev)
-    if [ ! -z "$rv" ]; then
-      echo "$rv"
-      break
+    if try_device $dev ; then
+      echo "$dev"
+      return 0
     fi
   done
+  return 0
 }
 
 wait_for_lvs() {
@@ -176,9 +156,8 @@ process_lv() {
     local vg=$1
     local lv=$2
     shift 3
-    local rv=$(try_device "/dev/$vg/$lv")
-    if [ ! -z "$rv" ]; then
-      echo "$rv"
+    if try_device "/dev/$vg/$lv" ; then
+      echo "/dev/$vg/$lv"
       return 0
     fi
   done
@@ -209,7 +188,7 @@ do_bare_metal() {
   # Alpine needs vgscan.
   if [ -x /sbin/setup-alpine ]; then
     log "Doing vgscan."
-    vgscan || :
+    vgscan >/dev/null 2>&1 || :
   fi
   log "Bare Metal $1"
   # Try logical volume names containing 'bootstrap'.
@@ -223,24 +202,24 @@ do_bare_metal() {
 }
 
 find_and_copy_bootstrap_files() {
+  local rv
   if [ -f /proc/xen/capabilities ]; then
     if [ ! -z "$(cat /proc/xen/capabilities)" ]; then
-      do_bare_metal dom0
+      rv="$(do_bare_metal dom0)"
     else
       log "VM domU xvd"
-      try_device_node xvd
+      rv="$(try_device_node xvd)"
     fi
   elif ls /dev/xvd* 2>/dev/null >/dev/null; then
-  #TODO DELETE elif [ ! -z "$(ls /dev/xvd* 2>/dev/null)" ]; then
     log "VM xen xvd"
-    try_device_node xvd
+    rv="$(try_device_node xvd)"
   elif ls /dev/vd* 2>/dev/null >/dev/null; then
-  #TODO elif [ ! -z "$(ls /dev/vd* 2>/dev/null)" ]; then
     log "VM kvm vd"
-    try_device_node vd
+    rv="$(try_device_node vd)"
   else
-    do_bare_metal kernel
+    rv="$(do_bare_metal kernel)"
   fi
+  echo "$rv"
 }
 
 # Delete existing /tmp/bootstrap files prior to searching for them on external volumes.
@@ -254,7 +233,8 @@ if [ -x /sbin/setup-alpine ]; then
 fi
 
 # Find and copy bootstrap files.
-if [ ! -z "$(find_and_copy_bootstrap_files)" ]; then
+res="$(find_and_copy_bootstrap_files)"
+if [ ! -z "$res" ]; then
   log "Bootstrap files successfully copied."
 else
   log "Bootstrap files not copied."
@@ -308,7 +288,8 @@ fi
 # Copy ssh identifiers.
 if [ -d /tmp/bootstrap/ssh ]; then 
   log "Copying ssh keys."
-  cp -a /tmp/bootstrap/ssh      /etc/
+  mkdir -p /etc/ssh
+  cp -p /tmp/bootstrap/ssh/*    /etc/ssh/
 fi
 
 # Setup persistent apk cache for alpine.
@@ -322,13 +303,14 @@ fi
 
 # TODO Local admin password???
 
-# Stop the libvirtd, if it exists on the boot device.
-# Cloud init images will not have libvirt (i.e. no nested virtualization).
-if [ ! -z "$(command -v libvirtd 2> /dev/null)" ]; then
+# Stop the libvirtd daemon, if necessary.
+# Only do this if there is a libvirt directory on the bootstrap device and
+# the libvirt daemon is running.
+if [ -d /srv/etc/libvirt ] && [ -n "$(ps aux | grep -i [l]ibvirtd)" ]; then
   service_control stop libvirtd
 fi
 
-# Start xen processes (if dom0) and bind libvirt directories (if needed).
+# Bind xen and libvirt directories (if needed).
 if [ -f /proc/xen/capabilities ]; then
   if [ ! -z "$(cat /proc/xen/capabilities)" ]; then
     log "Mounting persistent xen/libvirt volumes."
@@ -340,6 +322,7 @@ if [ -f /proc/xen/capabilities ]; then
   fi
 else
   # No proc/xen/capabilities so must be VM or kvm.
+  # TODO Is this right?
   if [ -d /srv/etc/libvirt ]; then
     log "Mounting persistent libvirt volumes."
     [ -d /srv/etc/libvirt ] && mount --bind /srv/etc/libvirt      /etc/libvirt
@@ -356,6 +339,7 @@ if [ ! -z "$NO_NETWORKING" ]; then
 else
   if [ -d /tmp/bootstrap/network-scripts ]; then
     log "Copying network scripts."
+    NETWORK_RECONFIGURED="true"
     # Remove all but the loopback device scripts
     [ -f /etc/sysconfig/network-scripts/ifcfg-lo ] && mv /etc/sysconfig/network-scripts/ifcfg-lo /etc/sysconfig/network-scripts/ifcfx-lo
     rm -f /etc/sysconfig/network-scripts/ifcfg-*
@@ -364,6 +348,7 @@ else
   fi
   if [ -f /tmp/bootstrap/network/interfaces ]; then
     log "Copying network interfaces."
+    NETWORK_RECONFIGURED="true"
     cp -a /tmp/bootstrap/network/interfaces /etc/network/interfaces
   fi
 fi
@@ -387,43 +372,43 @@ wait_for_internet() {
 }
 
 # Start/restart networking.
-if [ ! -z "$NO_NETWORKING" ]; then
+if [ -n "$NO_NETWORKING" ]; then
   log "Skipping network restart."
-else
+elif [ -n "$NETWORK_RECONFIGURED" ]; then
+  # Only restart network if it has been reconfigured.
   if [ -x /sbin/setup-alpine ]; then
     # Alpine
     log "Restarting network (Alpine/Other)."
     /etc/init.d/networking restart
-    wait_for_internet
   elif [ -d /etc/yum.repos.d ]; then
     # centos/redhat/fedora
     log "Restarting NetworkManager (Redhat/Fedora/Centos)"
     systemctl restart NetworkManager
-    wait_for_internet
   elif [ ! -z "$(command -v apt-get 2> /dev/null)" ]; then
     # debian/ubuntu
     log "Starting networking (Debian/Ubuntu)"
     systemctl restart NetworkManager
-    wait_for_internet
   else
     log "Warning: Don't know how to restart networking."
   fi
 fi
 
-# Start the libvirtd, if it exists on the boot device.
-if [ ! -z "$(command -v libvirtd 2> /dev/null)" ]; then
+if [ -z "$NO_NETWORKING" ]; then
+  wait_for_internet
+fi
+
+# Start the libvirtd, if it exists on the boot device and is not running.
+if [ ! -z "$(command -v libvirtd 2> /dev/null)" ] && [ -z "$(ps aux | grep -i [l]ibvirtd)" ]; then
   service_control start libvirtd
 fi
 
 # Execute the startup script.
-if [ -x /tmp/bootstrap/startup ]; then
+start_script="/tmp/bootstrap/start"
+[ ! -x $start_script ] && start_script="/tmp/bootstrap/startup"
+if [ -x $start_script ]; then
   log "Executing startup script."
-  /tmp/bootstrap/startup >>$LOG
+  $start_script >>$LOG
   log "startup script finished."
-elif [ -x /tmp/bootstrap/start ]; then
-  log "Executing start script."
-  /tmp/bootstrap/start >>$LOG
-  log "start script finished."
 else
   log "Not using startup script."
 fi
