@@ -146,6 +146,7 @@ wait_for_lvs() {
     done
     [ "${lv_attr:6:1}" != "a" ] && log "Warning: volume $vg/$lv did not become active."
   done
+  return 0
 }
 
 process_lv() {
@@ -161,6 +162,7 @@ process_lv() {
       return 0
     fi
   done
+  return 0
 }
 
 try_lvs() {
@@ -222,26 +224,58 @@ find_and_copy_bootstrap_files() {
   echo "$rv"
 }
 
-# Delete existing /tmp/bootstrap files prior to searching for them on external volumes.
-rm -rf /tmp/bootstrap
-rm -f /tmp/mount-bootstrap
-rm -f /tmp/bootstrap.log
+# For testing, a custom bootstrap-startup file can be placed in /srv/bootstrap/bootstrap-startup.
+# Once the bootstrap files have been copied, the standard process will "exec" the custom script
+# which will continue with the files previously copied.
+MODE="standard"
+[ "${0:0:4}" = "/tmp" ] && MODE="custom"
 
-# If alpine, load btrfs module.
-if [ -x /sbin/setup-alpine ]; then
-  modprobe btrfs
-fi
+if [ "$MODE" = "standard"  ]; then
 
-# Find and copy bootstrap files.
-res="$(find_and_copy_bootstrap_files)"
-if [ ! -z "$res" ]; then
-  log "Bootstrap files successfully copied."
+  # Delete existing /tmp/bootstrap files prior to searching for them on external volumes.
+  rm -rf /tmp/bootstrap
+  rm -f /tmp/mount-bootstrap
+  rm -f /tmp/bootstrap.log
+
+  # If alpine, load btrfs module.
+  if [ -x /sbin/setup-alpine ]; then
+    modprobe btrfs
+  fi
+
+  # Find and copy bootstrap files.
+  res="$(find_and_copy_bootstrap_files)"
+  if [ ! -z "$res" ]; then
+    log "Bootstrap files successfully copied."
+    # Exec the custom script, if there is one.
+    if [ -x /tmp/bootstrap/bootstrap-startup ]; then
+      log "Chaining to custom bootstrap startup script."
+      exec /tmp/bootstrap/bootstrap-startup
+      log "This should never be reached."
+    fi
+  else
+    log "Bootstrap files not copied."
+  fi
+  log "Continuing with standard bootstrap process."
 else
-  log "Bootstrap files not copied."
+  log "Continuing with custom bootstrap process."
 fi
 
 # Source bootstrap options, if available.
 [ -e /tmp/bootstrap/bootstrap.conf ] && . /tmp/bootstrap/bootstrap.conf
+
+if [ -n "$HOST" ]; then
+  if [ -x /sbin/setup-alpine ]; then
+    # Alpine doesn't like fqdn.
+    log "Setting hostname to ${HOST}."
+    /sbin/setup-hostname "$(echo $HOST | cut -d '.' -f 1)"
+    /etc/init.d/hostname --quiet restart
+  else
+    FQDN=$HOST
+    [ -n "$DOMAIN" ] && FQDN="${FQDN}.$DOMAIN"
+    log "Setting hostname to ${FQDN}."
+    hostname $FQDN
+  fi
+fi
 
 [ ! -z "$test" ] && exit 0
 
@@ -271,6 +305,35 @@ if [ -d /srv/local/bin ]; then
   PATH=${PATH}:/srv/local/bin
 fi
 
+create_persisent_dir() {
+
+  # If the source directory exists.
+  if [ -d /$1 ]; then
+    # If the persistent does not.
+    if [ ! -d /srv/$1 ]; then
+      log "Creating persistent directory: /srv/${1}."
+      mkdir -p /srv/${1}
+      cp -a /$1 /srv/${1}/../
+    fi
+  fi
+}
+
+# Create the persistent xen & libvirt directories, if necessary.
+create_persisent_dir var/lib/xen
+create_persisent_dir var/log/xen
+create_persisent_dir etc/libvirt
+create_persisent_dir var/lib/libvirt
+create_persisent_dir var/log/libvirt
+create_persisent_dir root
+create_persisent_dir home
+
+# If this is the first run, persist the ssh host keys.
+if [ -d /srv/bootstrap ] && [ ! -d /srv/bootstrap/ssh ]; then
+  log "Creating persistent ssh host keys."
+  mkdir -p /srv/bootstrap/ssh
+  cp /etc/ssh/ssh_host* /srv/bootstrap/ssh
+fi
+
 # Mount persistent root.
 if [ -d /srv/root ]; then 
   log "Mounting persistent root."
@@ -289,7 +352,7 @@ fi
 if [ -d /tmp/bootstrap/ssh ]; then 
   log "Copying ssh keys."
   mkdir -p /etc/ssh
-  cp -p /tmp/bootstrap/ssh/*    /etc/ssh/
+  cp -p /tmp/bootstrap/ssh/ssh_host*    /etc/ssh/
 fi
 
 # Setup persistent apk cache for alpine.
@@ -303,10 +366,8 @@ fi
 
 # TODO Local admin password???
 
-# Stop the libvirtd daemon, if necessary.
-# Only do this if there is a libvirt directory on the bootstrap device and
-# the libvirt daemon is running.
-if [ -d /srv/etc/libvirt ] && [ -n "$(ps aux | grep -i [l]ibvirtd)" ]; then
+# Stop the libvirtd daemon, if it's running and there is a bootstrap volume.
+if [ -n "$(ps aux | grep -i [l]ibvirtd)" ] && [ -x /tmp/mount-bootstrap ]; then
   service_control stop libvirtd
 fi
 
@@ -314,18 +375,21 @@ fi
 if [ -f /proc/xen/capabilities ]; then
   if [ ! -z "$(cat /proc/xen/capabilities)" ]; then
     log "Mounting persistent xen/libvirt volumes."
-    [ -d /srv/var/lib/xen ] && mount --bind /srv/var/lib/xen      /var/lib/xen
-    [ -d /srv/var/log/xen ] && mount --bind /srv/var/log/xen      /var/log/xen
-    [ -d /srv/etc/libvirt ] && mount --bind /srv/etc/libvirt      /etc/libvirt
+    [ -d /srv/var/lib/xen ]     && mount --bind /srv/var/lib/xen      /var/lib/xen
+    [ -d /srv/var/log/xen ]     && mount --bind /srv/var/log/xen      /var/log/xen
+    [ -d /srv/etc/libvirt ]     && mount --bind /srv/etc/libvirt      /etc/libvirt
     [ -d /srv/var/lib/libvirt ] && mount --bind /srv/var/lib/libvirt  /var/lib/libvirt
     [ -d /srv/var/log/libvirt ] && mount --bind /srv/var/log/libvirt  /var/log/libvirt
+  else
+    # Nothing to do.  This is a xen DomU.
+    true
   fi
 else
-  # No proc/xen/capabilities so must be VM or kvm.
+  # No proc/xen/capabilities so must be a kvm VM or a kvm bare-metal host.
   # TODO Is this right?
   if [ -d /srv/etc/libvirt ]; then
     log "Mounting persistent libvirt volumes."
-    [ -d /srv/etc/libvirt ] && mount --bind /srv/etc/libvirt      /etc/libvirt
+    [ -d /srv/etc/libvirt ]         && mount --bind /srv/etc/libvirt          /etc/libvirt
     [ -d /srv/var/lib/libvirt-kvm ] && mount --bind /srv/var/lib/libvirt-kvm  /var/lib/libvirt
     [ -d /srv/var/log/libvirt-kvm ] && mount --bind /srv/var/log/libvirt-kvm  /var/log/libvirt
   fi
