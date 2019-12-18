@@ -4,7 +4,21 @@
 LOG="/tmp/bootstrap.log"
 
 log() {
-  echo "$1" >>$LOG
+  echo "$(date +%H:%M:%S) $1" >>$LOG
+  logger -t bootstrap "$1" || :
+}
+
+# Generic service control function.
+service_control() {
+
+  if [ ! -z "$(command -v systemctl 2> /dev/null)" ]; then
+    log "Service $2 $1 (systemd)"
+    systemctl $1 $2 || :
+  else
+    log "Service $2 $1 (init)"
+    /etc/init.d/$2 $1 || :
+    /etc/init.d/$2 status || :
+  fi
 }
 
 # Execute the shutdown script.
@@ -18,5 +32,15 @@ elif [ -x /tmp/bootstrap/stop ]; then
   log "stop script finished."
 else
   log "Not using shutdown script."
+fi
+
+if [ -n "$(ps aux | grep -i [l]ibvirtd)" ]; then
+  service_control stop libvirtd
+fi
+
+if [ -d /srv/bootstrap ]; then
+  log "Copying bootstrap log to persistent directory."
+  log "Done!"
+  cp /tmp/bootstrap.log /srv/bootstrap/
 fi
 
