@@ -169,7 +169,7 @@ wait_for_lvs() {
 }
 
 process_lv() {
-  wait_for_lvs $*
+  wait_for_lvs $@
   # Now, hopefully the volumes are all online.  
   # Try them one at a time.
   while (( "$#" )); do
@@ -187,14 +187,19 @@ process_lv() {
 try_lvs() {
   msg="Trying logical volumes named '$1'."
   local inverse
-  if [ ! -z "$2" ]; then
+  if [ -n "$2" ]; then
     msg="Trying volumes not named '$1'."
     inverse="-v"
   fi
   log "$msg"
   if [ ! -z "$(command -v lvs 2> /dev/null)" ]; then
     local scan="$(lvs --noheadings -o vg_name,lv_name,lv_attr | grep $inverse $1 || :)"
-    local rv=$(process_lv $scan)
+    local rv=""
+    if [ -n "$scan" ]; then
+      rv=$(process_lv $scan)
+    else
+      log "No volumes found."
+    fi
     echo $rv
   fi
 }
@@ -267,8 +272,9 @@ service_control() {
     log "Service $2 $1 (systemd)"
     systemctl $1 $2 || :
   else
-    log "Service $2 $1 (systemd)"
+    log "Service $2 $1 (init)"
     /etc/init.d/$2 $1 || :
+    /etc/init.d/$2 status || :
   fi
 }
 
