@@ -113,12 +113,28 @@ try_device() {
   return $rc
 }
 
+try_swaps() {
+  log "Trying swaps in /dev/${1}*."
+  for dev in $(ls /dev/${1}* 2>/dev/null && true); do
+    local blkid
+    local fs_type
+    blkid="$(blkid -s TYPE $dev || :)"
+    fs_type=$(echo $blkid | cut -d '"' -f2)
+    if [ "$fs_type" = "swap" ]; then
+      log "Mounting swap device $dev"
+      swapon $dev && true
+      break
+    fi
+  done
+  return 0
+}
+
 try_device_node() {
   log "Trying devices in /dev/${1}*."
-  for dev in $(ls /dev/${1}* 2>/dev/null); do
+  for dev in $(ls /dev/${1}* 2>/dev/null && true); do
     if try_device $dev ; then
       echo "$dev"
-      return 0
+      break
     fi
   done
   return 0
@@ -260,6 +276,10 @@ else
   log "Continuing with custom bootstrap process."
 fi
 
+# Try to mount swap device (Only for VM's not bare metal).
+ls /dev/xvd* >/dev/null 2>&1 && try_swaps xvd
+ls /dev/vd*  >/dev/null 2>&1 && try_swaps vd
+
 # Source bootstrap options, if available.
 [ -e /tmp/bootstrap/bootstrap.conf ] && . /tmp/bootstrap/bootstrap.conf
 
@@ -326,6 +346,8 @@ create_persisent_dir var/lib/libvirt
 create_persisent_dir var/log/libvirt
 create_persisent_dir root
 create_persisent_dir home
+create_persisent_dir var/lib/docker
+create_persisent_dir var/lib/containers
 
 # If this is the first run, persist the ssh host keys.
 if [ -d /srv/bootstrap ] && [ ! -d /srv/bootstrap/ssh ]; then
@@ -334,19 +356,25 @@ if [ -d /srv/bootstrap ] && [ ! -d /srv/bootstrap/ssh ]; then
   cp /etc/ssh/ssh_host* /srv/bootstrap/ssh
 fi
 
+bind_mount() {
+
+  src="$1"
+  dst="$1"
+  [ -n "$2" ] && dst="$2"
+  if [ -d /srv/$1 ]; then
+    if mount --bind /srv/$src /$dst ; then
+      log "Bind mounting /${dst}."
+    else
+      log "Bind mount of /${dst} failed."
+    fi
+  fi
+}
+
 # Mount persistent root.
-if [ -d /srv/root ]; then 
-  log "Mounting persistent root."
-  umount /root 2>/dev/null || :
-  mount --bind /srv/root      /root
-fi
+bind_mount root
 
 # Mount persistent home.
-if [ -d /srv/home ]; then 
-  log "Mounting persistent home."
-  umount /home 2>/dev/null || :
-  mount --bind /srv/home      /home
-fi
+bind_mount home
 
 # Copy ssh identifiers.
 if [ -d /tmp/bootstrap/ssh ]; then 
@@ -374,26 +402,27 @@ fi
 # Bind xen and libvirt directories (if needed).
 if [ -f /proc/xen/capabilities ]; then
   if [ ! -z "$(cat /proc/xen/capabilities)" ]; then
-    log "Mounting persistent xen/libvirt volumes."
-    [ -d /srv/var/lib/xen ]     && mount --bind /srv/var/lib/xen      /var/lib/xen
-    [ -d /srv/var/log/xen ]     && mount --bind /srv/var/log/xen      /var/log/xen
-    [ -d /srv/etc/libvirt ]     && mount --bind /srv/etc/libvirt      /etc/libvirt
-    [ -d /srv/var/lib/libvirt ] && mount --bind /srv/var/lib/libvirt  /var/lib/libvirt
-    [ -d /srv/var/log/libvirt ] && mount --bind /srv/var/log/libvirt  /var/log/libvirt
+    bind_mount var/lib/xen
+    bind_mount var/log/xen
+    bind_mount etc/libvirt
+    bind_mount var/lib/libvirt
+    bind_mount var/log/libvirt
   else
     # Nothing to do.  This is a xen DomU.
     true
   fi
 else
   # No proc/xen/capabilities so must be a kvm VM or a kvm bare-metal host.
-  # TODO Is this right?
   if [ -d /srv/etc/libvirt ]; then
-    log "Mounting persistent libvirt volumes."
-    [ -d /srv/etc/libvirt ]         && mount --bind /srv/etc/libvirt          /etc/libvirt
-    [ -d /srv/var/lib/libvirt-kvm ] && mount --bind /srv/var/lib/libvirt-kvm  /var/lib/libvirt
-    [ -d /srv/var/log/libvirt-kvm ] && mount --bind /srv/var/log/libvirt-kvm  /var/log/libvirt
+    bind_mount etc/libvirt
+    bind_mount var/lib/libvirt
+    bind_mount var/log/libvirt
   fi
 fi
+
+# Mount persistent container directories.
+bind_mount var/lib/docker
+bind_mount var/lib/containers
 
 [ -f /tmp/bootstrap/skip-network ] && NO_NETWORKING="true"
 
