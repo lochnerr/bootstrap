@@ -353,7 +353,8 @@ create_persisent_dir var/lib/containers
 if [ -d /srv/bootstrap ] && [ ! -d /srv/bootstrap/ssh ]; then
   log "Creating persistent ssh host keys."
   mkdir -p /srv/bootstrap/ssh
-  cp /etc/ssh/ssh_host* /srv/bootstrap/ssh
+  cp -p /etc/ssh/ssh_host*    /srv/bootstrap/ssh
+  cp -p /etc/ssh/sshd_config  /srv/bootstrap/ssh
 fi
 
 bind_mount() {
@@ -361,7 +362,7 @@ bind_mount() {
   src="$1"
   dst="$1"
   [ -n "$2" ] && dst="$2"
-  if [ -d /srv/$1 ]; then
+  if [ -d /srv/$src ]; then
     if mount --bind /srv/$src /$dst ; then
       log "Bind mounting /${dst}."
     else
@@ -381,6 +382,10 @@ if [ -d /tmp/bootstrap/ssh ]; then
   log "Copying ssh keys."
   mkdir -p /etc/ssh
   cp -p /tmp/bootstrap/ssh/ssh_host*    /etc/ssh/
+  if [ -e /tmp/bootstrap/ssh/sshd_config ]; then
+    log "Copying sshd config."
+    cp -p /tmp/bootstrap/ssh/sshd_config  /etc/ssh/
+  fi
 fi
 
 # Setup persistent apk cache for alpine.
