@@ -2,6 +2,7 @@
 
 # The log directory
 LOG="/tmp/bootstrap.log"
+[ -e /srv/bootstrap/bootstrap.log ] && LOG="/srv/bootstrap/bootstrap.log"
 
 log() {
   echo "$(date +%H:%M:%S) $1" >>$LOG

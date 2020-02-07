@@ -212,6 +212,7 @@ do_bare_metal() {
   # Try logical volume names containing 'bootstrap'.
   [ -z "$rv" ] && rv="$(try_lvs bootstrap)"
   # Try disk partitions.
+  [ -z "$rv" ] && rv="$(try_device_node nvme0)"
   [ -z "$rv" ] && rv="$(try_device_node sd)"
   # Try all other logical volumes.
   [ -z "$rv" ] && rv="$(try_lvs bootstrap inverse)"
@@ -221,11 +222,13 @@ do_bare_metal() {
 
 find_and_copy_bootstrap_files() {
   local rv
-  if [ -f /proc/xen/capabilities ]; then
-    if [ ! -z "$(cat /proc/xen/capabilities)" ]; then
+  # See: https://wiki.xenproject.org/wiki/Xen_FAQ_Dom0#How_do_I_tell_if_I.27m_running_in_a_dom0_or_a_domU.3F
+  # Note the comment: Some domUs will have the file and some will not.
+  if [ -e /proc/xen/capabilities ]; then
+    if grep -q control_d /proc/xen/capabilities; then
       rv="$(do_bare_metal dom0)"
     else
-      log "VM domU xvd"
+      log "VM xen domU xvd"
       rv="$(try_device_node xvd)"
     fi
   elif ls /dev/xvd* 2>/dev/null >/dev/null; then
@@ -325,7 +328,7 @@ if [ -d /srv/local/bin ]; then
   PATH=${PATH}:/srv/local/bin
 fi
 
-create_persisent_dir() {
+create_persistent_dir() {
 
   # If the source directory exists.
   if [ -d /$1 ]; then
@@ -338,16 +341,18 @@ create_persisent_dir() {
   fi
 }
 
-# Create the persistent xen & libvirt directories, if necessary.
-create_persisent_dir var/lib/xen
-create_persisent_dir var/log/xen
-create_persisent_dir etc/libvirt
-create_persisent_dir var/lib/libvirt
-create_persisent_dir var/log/libvirt
-create_persisent_dir root
-create_persisent_dir home
-create_persisent_dir var/lib/docker
-create_persisent_dir var/lib/containers
+if [ -x /tmp/mount-bootstrap ]; then
+  # Create persistent directories if the /srv directory has been mounted.
+  create_persistent_dir var/lib/xen
+  create_persistent_dir var/log/xen
+  create_persistent_dir etc/libvirt
+  create_persistent_dir var/lib/libvirt
+  create_persistent_dir var/log/libvirt
+  create_persistent_dir root
+  create_persistent_dir home
+  create_persistent_dir var/lib/docker
+  create_persistent_dir var/lib/containers
+fi
 
 # If this is the first run, persist the ssh host keys.
 if [ -d /srv/bootstrap ] && [ ! -d /srv/bootstrap/ssh ]; then
@@ -362,6 +367,8 @@ bind_mount() {
   src="$1"
   dst="$1"
   [ -n "$2" ] && dst="$2"
+  # If the destination mount point does not exist, there is nothing to do.
+  [ ! -e /$dst ] && return
   if [ -d /srv/$src ]; then
     if mount --bind /srv/$src /$dst ; then
       log "Bind mounting /${dst}."
@@ -385,6 +392,12 @@ if [ -d /tmp/bootstrap/ssh ]; then
   if [ -e /tmp/bootstrap/ssh/sshd_config ]; then
     log "Copying sshd config."
     cp -p /tmp/bootstrap/ssh/sshd_config  /etc/ssh/
+    # If a custom sshd config is being used on a sysconfig fedora-like system, disable
+    # system-wide crypto policy for sshd.
+    if [ -e /etc/sysconfig/sshd ]; then
+      sed -i 's:^#.*CRYPTO_POLICY.*:CRYPTO_POLICY=:' /etc/sysconfig/sshd
+    fi
+    systemctl restart sshd
   fi
 fi
 
@@ -404,26 +417,13 @@ if [ -n "$(ps aux | grep -i [l]ibvirtd)" ] && [ -x /tmp/mount-bootstrap ]; then
   service_control stop libvirtd
 fi
 
-# Bind xen and libvirt directories (if needed).
-if [ -f /proc/xen/capabilities ]; then
-  if [ ! -z "$(cat /proc/xen/capabilities)" ]; then
-    bind_mount var/lib/xen
-    bind_mount var/log/xen
-    bind_mount etc/libvirt
-    bind_mount var/lib/libvirt
-    bind_mount var/log/libvirt
-  else
-    # Nothing to do.  This is a xen DomU.
-    true
-  fi
-else
-  # No proc/xen/capabilities so must be a kvm VM or a kvm bare-metal host.
-  if [ -d /srv/etc/libvirt ]; then
-    bind_mount etc/libvirt
-    bind_mount var/lib/libvirt
-    bind_mount var/log/libvirt
-  fi
-fi
+# Bind xen and libvirt directories.  These will only be bound if both the source 
+# and destination directories exist.
+bind_mount var/lib/xen
+bind_mount var/log/xen
+bind_mount etc/libvirt
+bind_mount var/lib/libvirt
+bind_mount var/log/libvirt
 
 # Mount persistent container directories.
 bind_mount var/lib/docker
@@ -512,4 +512,7 @@ else
 fi
 
 log "Bootstrap startup completed!"
+
+# Save log to persistent storage.
+[ -d /srv/bootstrap ] && cp -p /tmp/bootstrap.log /srv/bootstrap/
 
