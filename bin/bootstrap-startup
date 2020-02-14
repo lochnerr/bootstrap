@@ -122,6 +122,7 @@ try_swaps() {
     fs_type=$(echo $blkid | cut -d '"' -f2)
     if [ "$fs_type" = "swap" ]; then
       log "Mounting swap device $dev"
+      SWAP_MOUNTED="true"
       swapon $dev && true
       break
     fi
@@ -212,7 +213,7 @@ do_bare_metal() {
   # Try logical volume names containing 'bootstrap'.
   [ -z "$rv" ] && rv="$(try_lvs bootstrap)"
   # Try disk partitions.
-  [ -z "$rv" ] && rv="$(try_device_node nvme0)"
+  [ -z "$rv" ] && rv="$(try_device_node nvme?)"
   [ -z "$rv" ] && rv="$(try_device_node sd)"
   # Try all other logical volumes.
   [ -z "$rv" ] && rv="$(try_lvs bootstrap inverse)"
@@ -224,21 +225,35 @@ find_and_copy_bootstrap_files() {
   local rv
   # See: https://wiki.xenproject.org/wiki/Xen_FAQ_Dom0#How_do_I_tell_if_I.27m_running_in_a_dom0_or_a_domU.3F
   # Note the comment: Some domUs will have the file and some will not.
+  touch /tmp/skip_network_reconfig
   if [ -e /proc/xen/capabilities ]; then
     if grep -q control_d /proc/xen/capabilities; then
+      rm /tmp/skip_network_reconfig
       rv="$(do_bare_metal dom0)"
     else
       log "VM xen domU xvd"
       rv="$(try_device_node xvd)"
     fi
-  elif ls /dev/xvd* 2>/dev/null >/dev/null; then
+  elif [ -d /proc/xen ]; then
     log "VM xen xvd"
     rv="$(try_device_node xvd)"
+  elif [ -L /dev/xvda ]; then
+    # The only time /dev/xvda is a link is in aws nitro.
+    log "VM AWS Nitro"
+    rv="$(try_device_node nvme?)"
+  elif [ ! -z "$(command -v libvirtd 2> /dev/null)" ]; then
+    # If libvirtd is installed, assume this is a KVM host.
+    log "KVM Host."
+    rm /tmp/skip_network_reconfig
+    rv="$(do_bare_metal kernel)"
   elif ls /dev/vd* 2>/dev/null >/dev/null; then
     log "VM kvm vd"
     rv="$(try_device_node vd)"
+  elif ls /dev/sd* 2>/dev/null >/dev/null; then
+    log "VM kvm sd"
+    rv="$(try_device_node sd)"
   else
-    rv="$(do_bare_metal kernel)"
+    log "No bootstrap device found."
   fi
   echo "$rv"
 }
@@ -279,9 +294,10 @@ else
   log "Continuing with custom bootstrap process."
 fi
 
-# Try to mount swap device (Only for VM's not bare metal).
-ls /dev/xvd* >/dev/null 2>&1 && try_swaps xvd
-ls /dev/vd*  >/dev/null 2>&1 && try_swaps vd
+# Try to mount first swap device.
+[ -z "$SWAP_MOUNTED" ] && ls /dev/nvme?* >/dev/null 2>&1 && try_swaps nvme?
+[ -z "$SWAP_MOUNTED" ] && ls /dev/xvd*   >/dev/null 2>&1 && try_swaps xvd
+[ -z "$SWAP_MOUNTED" ] && ls /dev/vd*    >/dev/null 2>&1 && try_swaps vd
 
 # Source bootstrap options, if available.
 [ -e /tmp/bootstrap/bootstrap.conf ] && . /tmp/bootstrap/bootstrap.conf
@@ -429,15 +445,14 @@ bind_mount var/log/libvirt
 bind_mount var/lib/docker
 bind_mount var/lib/containers
 
-[ -f /tmp/bootstrap/skip-network ] && NO_NETWORKING="true"
+[ -e /tmp/skip_network_reconfig ] && NO_NETWORKING="true"
 
 # Copy network scripts.
-if [ ! -z "$NO_NETWORKING" ]; then
+if [ -n "$NO_NETWORKING" ]; then
   log "Skipping network configuration."
 else
   if [ -d /tmp/bootstrap/network-scripts ]; then
     log "Copying network scripts."
-    NETWORK_RECONFIGURED="true"
     # Remove all but the loopback device scripts
     [ -f /etc/sysconfig/network-scripts/ifcfg-lo ] && mv /etc/sysconfig/network-scripts/ifcfg-lo /etc/sysconfig/network-scripts/ifcfx-lo
     rm -f /etc/sysconfig/network-scripts/ifcfg-*
@@ -446,9 +461,10 @@ else
   fi
   if [ -f /tmp/bootstrap/network/interfaces ]; then
     log "Copying network interfaces."
-    NETWORK_RECONFIGURED="true"
     cp -a /tmp/bootstrap/network/interfaces /etc/network/interfaces
   fi
+  # Force Networking restart.
+  NETWORK_RECONFIGURED="true"
 fi
 
 wait_for_internet_poll() {
@@ -480,6 +496,9 @@ elif [ -n "$NETWORK_RECONFIGURED" ]; then
     /etc/init.d/networking restart
   elif [ -d /etc/yum.repos.d ]; then
     # centos/redhat/fedora
+    if [ -z "$(ps aux | grep [N]etworkManager 2>/dev/null || true)" ]; then
+      log "NetworkManager is not running."
+    fi
     log "Restarting NetworkManager (Redhat/Fedora/Centos)"
     systemctl restart NetworkManager
   elif [ ! -z "$(command -v apt-get 2> /dev/null)" ]; then
@@ -491,13 +510,20 @@ elif [ -n "$NETWORK_RECONFIGURED" ]; then
   fi
 fi
 
-if [ -z "$NO_NETWORKING" ]; then
-  wait_for_internet
-fi
+# Wait for the network to come up.
+wait_for_internet
 
 # Start the libvirtd, if it exists on the boot device and is not running.
 if [ ! -z "$(command -v libvirtd 2> /dev/null)" ] && [ -z "$(ps aux | grep -i [l]ibvirtd)" ]; then
   service_control start libvirtd
+fi
+
+if [ -x /etc/sysconfig/network-scripts/ec2net-functions ]; then
+  # Remove extranneous log messages from Amazon Linux 2.
+  sed -i \
+      -e 's@ logger --tag ec2net ".get_meta. Trying to get@ #logger --tag ec2net "[get_meta] Trying to get@' \
+      -e 's@ logger --tag ec2net ".rewrite_aliases.@ #logger --tag ec2net "[rewrite_aliases]@' \
+      /etc/sysconfig/network-scripts/ec2net-functions
 fi
 
 # Execute the startup script.
@@ -513,6 +539,18 @@ fi
 
 log "Bootstrap startup completed!"
 
+# Rotate log file history.
+[ -e /srv/bootstrap/bootstrap.log.5 ] && rm /srv/bootstrap/bootstrap.log.5
+[ -e /srv/bootstrap/bootstrap.log.4 ] && mv /srv/bootstrap/bootstrap.log.4 /srv/bootstrap/bootstrap.log.5
+[ -e /srv/bootstrap/bootstrap.log.3 ] && mv /srv/bootstrap/bootstrap.log.3 /srv/bootstrap/bootstrap.log.4
+[ -e /srv/bootstrap/bootstrap.log.2 ] && mv /srv/bootstrap/bootstrap.log.2 /srv/bootstrap/bootstrap.log.3
+[ -e /srv/bootstrap/bootstrap.log.1 ] && mv /srv/bootstrap/bootstrap.log.1 /srv/bootstrap/bootstrap.log.2
+[ -e /srv/bootstrap/bootstrap.log   ] && mv /srv/bootstrap/bootstrap.log   /srv/bootstrap/bootstrap.log.1
+
 # Save log to persistent storage.
 [ -d /srv/bootstrap ] && cp -p /tmp/bootstrap.log /srv/bootstrap/
+
+# Make sure exit code is good.
+true
+exit 0
 
