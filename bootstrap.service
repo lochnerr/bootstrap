@@ -1,7 +1,5 @@
 [Unit]
-Description=Xen Host Startup Service
-#Requires=proc-xen.mount
-Before=xenconsoled.service
+Description=Bootstrap Service
 After=lvm2-monitor.service
 
 [Service]
