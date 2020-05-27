@@ -4,56 +4,10 @@ set -e
 
 # bootstrap-install: Script to install or update the bootstrap files.
 
-# Done: Needs to work with live-xen-fedora...
-#       Nice to work with git pull/install...
-# Done: Needs to work with cloud-init (including aws)...
-
 if [ "$UID" != "0" ]; then
   echo "Error: Must be root!"
   exit 1
 fi
-
-secure_sshd_config() {
-
-  PFX="$1"
-  CFILE="${PFX}/etc/ssh/sshd_config"
-
-  if [ -e ${CFILE}.bak ]; then
-    echo "Info: SSH Daemon already updated, nothing to do!"
-    return
-  fi
-
-  if [ -e ${PFX}/etc/sysconfig/sshd ]; then
-    echo "Info: Disabling system-wide crypto policy for sshd."
-    sed -i 's/^# CRYPTO_POLICY=.*/CRYPTO_POLICY=/' ${PFX}/etc/sysconfig/sshd
-  fi
-
-  echo "Info: Backing up original sshd_config file."
-  cp -p ${CFILE} ${CFILE}.bak
-
-  # Secure the configuration.
-  sed -i \
-   -e 's:^HostKey.*/etc/ssh/ssh_host_ecdsa_key:#HostKey /etc/ssh/ssh_host_ecdsa_key:' \
-   -e '/^#RekeyLimit .*/a KexAlgorithms curve25519-sha256@libssh.org \
-Ciphers chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com,aes256-ctr,aes192-ctr,aes128-ctr \
-MACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com,umac-128-etm@openssh.com' \
-   -e 's:^#LogLevel.*:LogLevel VERBOSE:' \
-   -e 's:^#PermitRootLogin.*:PermitRootLogin forced-commands-only:' \
-   -e 's:^Subsystem.*sftp.*:Subsystem sftp	/usr/libexec/openssh/sftp-server -f AUTHPRIV -l INFO:' \
-   ${CFILE}
-
-  # Did it work?
-  diff ${CFILE}.bak ${CFILE} >${CFILE}.diff
-
-  if [ -n "$(ps aux | grep [s]shd || :)"] ; then
-    echo "Restarting SSH Daemon."
-    if command -v apk >/dev/null 2>&1 ; then
-      /etc/init.d/sshd restart || :
-    else
-      systemctl restart sshd || :
-    fi
-  fi
-}
 
 install_bootstrap() {
 
@@ -93,9 +47,10 @@ install_bootstrap() {
   fi
 }
 
-install_bootstrap
-secure_sshd_config
+echo >/var/log/bootstrap-install.log
 
-echo "$(date +%Y/%m/%d) Bootstrap service install completed!" >>/var/log/bootstrap-install.log
-echo "$(date +%Y/%m/%d) Bootstrap service install completed!"
+secure-sshd         | tee -a /var/log/bootstrap-install.log
+install_bootstrap   | tee -a /var/log/bootstrap-install.log
+
+echo "$(date +%Y/%m/%d) Bootstrap service install completed!"   | tee -a /var/log/bootstrap-install.log
 

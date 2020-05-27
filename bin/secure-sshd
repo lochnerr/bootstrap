@@ -1,0 +1,111 @@
+#!/bin/sh
+
+# See: https://github.com/jtesta/ssh-audit
+# git clone https://github.com/jtesta/ssh-audit.git
+
+set -e
+
+generate_rsa_key() {
+
+  echo "Generating strong rsa key."
+  rm -f /etc/ssh/ssh_host_rsa_key*
+  ssh-keygen -t rsa -b 4096 -f /etc/ssh/ssh_host_rsa_key -N ""
+}
+
+
+secure_sshd() {
+
+  # Secure sshd configuration.
+  # Tested with Fedora 31/32 cloud.
+  # Also tested with Alpine 3.11.
+
+  PFX="$1"
+  CFILE="${PFX}/etc/ssh/sshd_config"
+  CRYPTO="${PFX}/etc/crypto-policies/back-ends/opensshserver.config"
+
+  # Save original config file.
+  if [ ! -e ${CFILE}.bak ]; then
+    echo "Info: Backing up original ${CFILE} file."
+    cp -p ${CFILE} ${CFILE}.bak
+  else
+    # Start with the original baseline.
+    echo "Info: Using original ${CFILE} file as baseline."
+    cp -p ${CFILE}.bak ${CFILE}
+  fi
+
+  # Save the original crypto policies file.
+  if [ ! -e ${CRYPTO}.bak ] && [ -e ${CRYPTO} ]; then
+    cp -P $CRYPTO ${CRYPTO}.bak
+  fi
+
+  # Remove weak host files.
+  rm -f /etc/ssh/ssh_host_dsa_key*
+  rm -f /etc/ssh/ssh_host_ecdsa_key*
+
+  # Generate a strong rsa key, if needed.
+  if [ ! -e /etc/ssh/ssh_host_rsa_key ]; then
+    generate_rsa_key
+  elif [ "$(ssh-keygen -l -f /etc/ssh/ssh_host_rsa_key | awk '$1 < 4096')" ]; then
+    generate_rsa_key
+  else
+    echo "RSA key is >= 4096 bits."
+  fi
+
+  # Update the group ownership and permissions for the keys.
+  if grep ssh_keys /etc/group >/dev/null 2>&1 ; then
+    echo "Updating group ownership and permissions for keys."
+    chgrp ssh_keys /etc/ssh/ssh_host_ed25519_key /etc/ssh/ssh_host_rsa_key
+    chmod g+r /etc/ssh/ssh_host_ed25519_key /etc/ssh/ssh_host_rsa_key
+  else
+    echo "Not updating group ownership and permissions for keys."
+  fi
+
+  # Clear weak moduli.
+  if [ ! -e /etc/ssh/moduli.bak ]; then
+    echo "Backing up /etc/ssh/moduli file."
+    cp -p /etc/ssh/moduli /etc/ssh/moduli.bak
+  fi
+  echo "Removing weak moduli entries."
+  awk '$5 >= 3071' /etc/ssh/moduli.bak > /etc/ssh/moduli
+
+  if [ ! -e ${CRYPTO} ]; then
+    echo "Securing the SSHD config."
+    sed -i -e '/RekeyLimit.*/ a Ciphers chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com,aes256-ctr,aes192-ctr,aes128-ctr\nMACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com,umac-128-etm@openssh.com\nKexAlgorithms curve25519-sha256@libssh.org\nHostKeyAlgorithms ssh-ed25519,ssh-ed25519-cert-v01@openssh.com' /etc/ssh/sshd_config
+  else
+    # Secure the configuration.
+    echo "Securing the CRYPTO_POLICY."
+    echo -e "CRYPTO_POLICY='\
+        -oCiphers=chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com,aes256-ctr,aes192-ctr,aes128-ctr \
+        -oMACs=hmac-sha2-256-etm@openssh.com,hmac-sha2-512-etm@openssh.com,umac-128-etm@openssh.com \
+        -oGSSAPIKexAlgorithms=gss-curve25519-sha256- \
+        -oKexAlgorithms=curve25519-sha256,curve25519-sha256@libssh.org,diffie-hellman-group16-sha512,diffie-hellman-group18-sha512,diffie-hellman-group-exchange-sha256 \
+        -oHostKeyAlgorithms=ssh-ed25519,ssh-ed25519-cert-v01@openssh.com,rsa-sha2-256,rsa-sha2-512,ssh-rsa-cert-v01@openssh.com \
+        -oPubkeyAcceptedKeyTypes=ssh-ed25519,ssh-ed25519-cert-v01@openssh.com,rsa-sha2-256,rsa-sha2-512,ssh-rsa-cert-v01@openssh.com \
+        -oCASignatureAlgorithms=rsa-sha2-256,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,rsa-sha2-512,ecdsa-sha2-nistp521,ssh-ed25519,ssh-rsa'" \
+	| sed -e 's/[[:space:]][[:space:]]*-oCipher/-oCipher/' -e 's/[[:space:]][[:space:]]*/ /g' >/etc/ssh/sshd-crypto-policy.txt
+    ln -sf /etc/ssh/sshd-crypto-policy.txt ${CRYPTO}
+    diff ${CRYPTO}.bak /etc/ssh/sshd-crypto-policy.txt || :
+  fi
+
+  # Fixup other configuration options.
+  sed -i \
+   -e 's/^[[:space:]]*#*[[:space:]]*LogLevel.*/LogLevel VERBOSE/' \
+   -e 's/^[[:space:]]*#*[[:space:]]*PermitRootLogin.*/PermitRootLogin forced-commands-only/' \
+   -e 's:^[[:space:]]*#*[[:space:]]*Subsystem[[:space:]]*sftp.*:Subsystem sftp\t/usr/libexec/openssh/sftp-server -f AUTHPRIV -l INFO:' \
+   -e 's/^[[:space:]]*HostKey \/etc\/ssh\/ssh_host_ecdsa_key$/\#HostKey \/etc\/ssh\/ssh_host_ecdsa_key/g' \
+   $CFILE || :
+  # Show the changes to the config.
+  diff ${CFILE}.bak ${CFILE} || :
+
+  if [ ! -x /sbin/apk ]; then
+    # Restart the ssh daemon.
+    systemctl restart sshd.service
+  else
+    /etc/init.d/sshd restart
+  fi
+
+  echo "$0 Done!"
+}
+
+secure_sshd
+
