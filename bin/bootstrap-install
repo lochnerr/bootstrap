@@ -4,8 +4,8 @@ set -e
 
 # bootstrap-install: Script to install or update the bootstrap files.
 
-if [ "$UID" != "0" ]; then
-  echo "Error: Must be root!"
+if [ "$(id -u)" != "0" ]; then
+  echo "Error: Must be root (id = '$UID')!"
   exit 1
 fi
 
@@ -50,6 +50,7 @@ install_bootstrap() {
 echo >/var/log/bootstrap-install.log
 
 secure-sshd         | tee -a /var/log/bootstrap-install.log
+logger -t bootstrap -f /var/log/bootstrap-install.log || :
 install_bootstrap   | tee -a /var/log/bootstrap-install.log
 
 echo "$(date +%Y/%m/%d) Bootstrap service install completed!"   | tee -a /var/log/bootstrap-install.log

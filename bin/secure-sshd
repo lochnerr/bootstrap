@@ -70,8 +70,8 @@ secure_sshd() {
 
   if [ ! -e ${CRYPTO} ]; then
     echo "Securing the SSHD config."
-    # Note: GSSAPIKexAlgorithms not supported in Alpine.
-    sed -i -e '/RekeyLimit.*/ a Ciphers chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com,aes256-ctr,aes192-ctr,aes128-ctr\nMACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com,umac-128-etm@openssh.com\nKexAlgorithms curve25519-sha256,curve25519-sha256@libssh.org,diffie-hellman-group16-sha512,diffie-hellman-group18-sha512,diffie-hellman-group-exchange-sha256\nHostKeyAlgorithms ssh-ed25519,ssh-ed25519-cert-v01@openssh.com,rsa-sha2-256,rsa-sha2-512,ssh-rsa-cert-v01@openssh.com\nPubkeyAcceptedKeyTypes ssh-ed25519,ssh-ed25519-cert-v01@openssh.com,rsa-sha2-256,rsa-sha2-512,ssh-rsa-cert-v01@openssh.com\nCASignatureAlgorithms rsa-sha2-256,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,rsa-sha2-512,ecdsa-sha2-nistp521,ssh-ed25519,ssh-rsa' /etc/ssh/sshd_config
+    # Note: GSSAPIKexAlgorithms not supported in Alpine.  This also works with Ubuntu 18.04.
+    sed -i -e '/RekeyLimit.*/ a Ciphers chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com,aes256-ctr,aes192-ctr,aes128-ctr\nMACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com,umac-128-etm@openssh.com\nKexAlgorithms curve25519-sha256,curve25519-sha256@libssh.org,diffie-hellman-group16-sha512,diffie-hellman-group18-sha512,diffie-hellman-group-exchange-sha256\nHostKeyAlgorithms ssh-ed25519,ssh-ed25519-cert-v01@openssh.com,rsa-sha2-256,rsa-sha2-512,ssh-rsa-cert-v01@openssh.com\nPubkeyAcceptedKeyTypes ssh-ed25519,ssh-ed25519-cert-v01@openssh.com,rsa-sha2-256,rsa-sha2-512,ssh-rsa-cert-v01@openssh.com' /etc/ssh/sshd_config
   else
     # Secure the configuration.
     echo "Securing the CRYPTO_POLICY."
@@ -81,8 +81,7 @@ secure_sshd() {
         -oGSSAPIKexAlgorithms=gss-curve25519-sha256- \
         -oKexAlgorithms=curve25519-sha256,curve25519-sha256@libssh.org,diffie-hellman-group16-sha512,diffie-hellman-group18-sha512,diffie-hellman-group-exchange-sha256 \
         -oHostKeyAlgorithms=ssh-ed25519,ssh-ed25519-cert-v01@openssh.com,rsa-sha2-256,rsa-sha2-512,ssh-rsa-cert-v01@openssh.com \
-        -oPubkeyAcceptedKeyTypes=ssh-ed25519,ssh-ed25519-cert-v01@openssh.com,rsa-sha2-256,rsa-sha2-512,ssh-rsa-cert-v01@openssh.com \
-        -oCASignatureAlgorithms=rsa-sha2-256,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,rsa-sha2-512,ecdsa-sha2-nistp521,ssh-ed25519,ssh-rsa'" \
+        -oPubkeyAcceptedKeyTypes=ssh-ed25519,ssh-ed25519-cert-v01@openssh.com,rsa-sha2-256,rsa-sha2-512,ssh-rsa-cert-v01@openssh.com'" \
 	| sed -e 's/[[:space:]][[:space:]]*-oCipher/-oCipher/' -e 's/[[:space:]][[:space:]]*/ /g' >/etc/ssh/sshd-crypto-policy.txt
     ln -sf /etc/ssh/sshd-crypto-policy.txt ${CRYPTO}
     diff ${CRYPTO}.bak /etc/ssh/sshd-crypto-policy.txt || :
@@ -109,4 +108,6 @@ secure_sshd() {
 }
 
 secure_sshd
+
+exit 0
 
