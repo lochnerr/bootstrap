@@ -447,6 +447,10 @@ if [ -e /etc/ssh/sshd-crypto-policy.txt ]; then
   fi
 fi
 
+# Ensure proper host key permissions.
+chmod 600 /etc/ssh/ssh_host*
+chmod 644 /etc/ssh/ssh_host*.pub
+
 # Restart sshd?
 if [ $SSHD_RESTART = "true" ]; then
   log "Restarting ssh daemon."
