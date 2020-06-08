@@ -1,0 +1,23 @@
+#!/bin/sh
+
+set -e
+
+# bootstrap-refresh: Script to install or update the bootstrap files.
+
+if [ "$(id -u)" != "0" ]; then
+  echo "Error: Must be root (id = '$UID')!"
+  exit 1
+fi
+
+cd /root
+
+if [ -x "bootstrap/bin/bootstrap-install" ]; then
+  cd bootstrap
+  git pull
+else
+  git clone https://github.com/lochnerr/bootstrap.git
+  cd bootstrap
+fi
+
+bin/bootstrap-install
+
