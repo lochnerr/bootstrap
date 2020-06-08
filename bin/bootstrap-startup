@@ -526,7 +526,7 @@ wait_for_internet() {
     log "Internet is up!"
     IP="$(ip route get 8.8.8.8 | awk -F'src ' 'NR==1{split($2,a," ");print a[1]}')"
     msg="IPv4 Address is: ${IP}."
-    log $msg
+    log "$msg"
     # Put this in the dmesg log.
     echo $msg >/dev/kmsg
   else
