@@ -11,25 +11,18 @@ fi
 
 install_bootstrap() {
 
-  # Determine the source directory.
-  PFX="."
-  [ -e bin/bootstrap.service ] && PFX="bin"
-
   # Copy the files.  When running under cloud-init, these files should have already been copied.
-  cp -p $PFX/bootstrap.service  /usr/lib/systemd/system/
-  cp -p $PFX/bootstrap-shutdown /usr/local/bin/
-  cp -p $PFX/bootstrap-startup  /usr/local/bin/
+  cp -p ./bootstrap.service  /usr/lib/systemd/system/
+  cp -p $PFX/*               /usr/local/bin/
 
   # Set file ownership.
   chown root:root /usr/lib/systemd/system/bootstrap.service
-  chown root:root /usr/local/bin/bootstrap-shutdown
-  chown root:root /usr/local/bin/bootstrap-startup
+  chown root:root /usr/local/bin/bootstrap*
 
   if command -v restorecon >/dev/null 2>&1 ; then
     # Make sure selinux is happy.
     restorecon  /usr/lib/systemd/system/bootstrap.service
-    restorecon  /usr/local/bin/bootstrap-shutdown
-    restorecon  /usr/local/bin/bootstrap-startup
+    restorecon  /usr/local/bin/bootstrap*
   fi
 
   # Enable the bootstrap service now!
@@ -43,6 +36,10 @@ install_bootstrap() {
 }
 
 echo >/var/log/bootstrap-install.log
+
+# Determine the source directory.
+PFX="."
+[ -x bin/secure-sshd ] && PFX="bin"
 
 $PFX/secure-sshd         | tee -a /var/log/bootstrap-install.log
 # Write the results of securing sshd to the system log so that in a hosted
