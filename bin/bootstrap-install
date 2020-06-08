@@ -16,19 +16,14 @@ install_bootstrap() {
   [ -e bin/bootstrap.service ] && PFX="bin"
 
   # Copy the files.  When running under cloud-init, these files should have already been copied.
-  [ -e $PFX/bootstrap.service ]  && cp -p $PFX/bootstrap.service  /usr/lib/systemd/system/
-  [ -e $PFX/bootstrap-shutdown ] && cp -p $PFX/bootstrap-shutdown /usr/local/bin/
-  [ -e $PFX/bootstrap-startup ]  && cp -p $PFX/bootstrap-startup  /usr/local/bin/
-
-  # Set permissions.
-  chmod 0644  /usr/lib/systemd/system/bootstrap.service
-  chmod 0755  /usr/local/bin/bootstrap-shutdown
-  chmod 0755  /usr/local/bin/bootstrap-startup
+  cp -p $PFX/bootstrap.service  /usr/lib/systemd/system/
+  cp -p $PFX/bootstrap-shutdown /usr/local/bin/
+  cp -p $PFX/bootstrap-startup  /usr/local/bin/
 
   # Set file ownership.
   chown root:root /usr/lib/systemd/system/bootstrap.service
   chown root:root /usr/local/bin/bootstrap-shutdown
-  chown root:root /usr/local/bin/bootstrap-shutdown
+  chown root:root /usr/local/bin/bootstrap-startup
 
   if command -v restorecon >/dev/null 2>&1 ; then
     # Make sure selinux is happy.
@@ -49,7 +44,10 @@ install_bootstrap() {
 
 echo >/var/log/bootstrap-install.log
 
-secure-sshd         | tee -a /var/log/bootstrap-install.log
+$PFX/secure-sshd         | tee -a /var/log/bootstrap-install.log
+# Write the results of securing sshd to the system log so that in a hosted
+# environment (e.g. aws) it can be verified that it ran correctly.  Or, what
+# went wrong if it failed.
 logger -t bootstrap -f /var/log/bootstrap-install.log || :
 install_bootstrap   | tee -a /var/log/bootstrap-install.log
 
