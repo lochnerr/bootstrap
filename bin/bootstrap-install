@@ -18,15 +18,18 @@ install_bootstrap() {
   # Set file ownership.
   chown root:root /usr/lib/systemd/system/bootstrap.service
   chown root:root /usr/local/bin/bootstrap*
+  chown root:root /usr/local/bin/secure-sshd
 
   # Set permissions.
   chmod 0644 /usr/lib/systemd/system/bootstrap.service
   chmod 0755 /usr/local/bin/bootstrap*
+  chmod 0755 /usr/local/bin/secure-sshd
 
   if command -v restorecon >/dev/null 2>&1 ; then
     # Make sure selinux is happy.
     restorecon  /usr/lib/systemd/system/bootstrap.service
     restorecon  /usr/local/bin/bootstrap*
+    restorecon  /usr/local/bin/secure-sshd
   fi
 
   # Enable the bootstrap service now!

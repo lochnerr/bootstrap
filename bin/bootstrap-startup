@@ -318,7 +318,11 @@ if [ -n "$HOST" ]; then
     FQDN=$HOST
     [ -n "$DOMAIN" ] && FQDN="${FQDN}.$DOMAIN"
     log "Setting hostname to ${FQDN}."
-    hostname $FQDN
+    if [ ! -z "$(command -v hostnamectl 2> /dev/null)" ]; then
+      hostnamectl set-hostname $FQDN
+    else
+      hostname $FQDN
+    fi
   fi
 fi
 
