@@ -272,6 +272,9 @@ MODE="standard"
 
 if [ "$MODE" = "standard"  ]; then
 
+  # Put this in the dmesg log.
+  echo "Enterimg ${0}." >/dev/kmsg
+
   # Delete existing /tmp/bootstrap files prior to searching for them on external volumes.
   rm -rf /tmp/bootstrap
   rm -f /tmp/mount-bootstrap
@@ -591,6 +594,9 @@ else
 fi
 
 log "Bootstrap startup completed!"
+
+echo "Exiting ${0}." >/dev/kmsg
+
 
 # Rotate log file history.
 [ -e /srv/bootstrap/bootstrap.log.5 ] && rm /srv/bootstrap/bootstrap.log.5
