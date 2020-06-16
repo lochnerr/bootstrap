@@ -468,15 +468,6 @@ if [ $SSHD_RESTART = "true" ]; then
   fi
 fi
 
-if [ ! -x /sbin/setup-alpine ]; then
-  systemctl status sshd >/tmp/status || true
-  while IFS="" read -r p || [ -n "$p" ]
-  do
-    printf '%s\n' "$p" >/dev/kmsg
-  done </tmp/status
-  rm /tmp/status
-fi
-
 # Setup persistent apk cache for alpine.
 if [ -x /sbin/setup-alpine ]; then
   if [ -d /srv/apkcache ]; then
@@ -589,6 +580,19 @@ if [ -x /etc/sysconfig/network-scripts/ec2net-functions ]; then
       -e 's@ logger --tag ec2net ".get_meta. Trying to get@ #logger --tag ec2net "[get_meta] Trying to get@' \
       -e 's@ logger --tag ec2net ".rewrite_aliases.@ #logger --tag ec2net "[rewrite_aliases]@' \
       /etc/sysconfig/network-scripts/ec2net-functions
+fi
+
+
+# Log the sshd status.
+if [ ! -x /sbin/setup-alpine ]; then
+  systemctl status sshd >/tmp/status || true
+  while IFS="" read -r p || [ -n "$p" ]
+  do
+    msg=$(printf '%s\n' "$p")
+    echo "$mag" >/dev/kmsg
+    log "$msg"
+  done </tmp/status
+  rm /tmp/status
 fi
 
 # Execute the startup script.
