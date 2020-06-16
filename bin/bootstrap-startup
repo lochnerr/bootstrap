@@ -273,7 +273,7 @@ MODE="standard"
 if [ "$MODE" = "standard"  ]; then
 
   # Put this in the dmesg log.
-  echo "Enterimg ${0}." >/dev/kmsg
+  echo "Entering ${0}." >/dev/kmsg
 
   # Delete existing /tmp/bootstrap files prior to searching for them on external volumes.
   rm -rf /tmp/bootstrap
@@ -466,6 +466,15 @@ if [ $SSHD_RESTART = "true" ]; then
   else
     systemctl restart sshd
   fi
+fi
+
+if [ ! -x /sbin/setup-alpine ]; then
+  systemctl status sshd >/tmp/status || true
+  while IFS="" read -r p || [ -n "$p" ]
+  do
+    printf '%s\n' "$p" >/dev/kmsg
+  done </tmp/status
+  rm /tmp/status
 fi
 
 # Setup persistent apk cache for alpine.
