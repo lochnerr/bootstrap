@@ -582,19 +582,6 @@ if [ -x /etc/sysconfig/network-scripts/ec2net-functions ]; then
       /etc/sysconfig/network-scripts/ec2net-functions
 fi
 
-
-# Log the sshd status.
-if [ ! -x /sbin/setup-alpine ]; then
-  systemctl status sshd >/tmp/status || true
-  while IFS="" read -r p || [ -n "$p" ]
-  do
-    msg=$(printf '%s\n' "$p")
-    echo "$mag" >/dev/kmsg
-    log "$msg"
-  done </tmp/status
-  rm /tmp/status
-fi
-
 # Execute the startup script.
 start_script="/tmp/bootstrap/start"
 [ ! -x $start_script ] && start_script="/tmp/bootstrap/startup"
