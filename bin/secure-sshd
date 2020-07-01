@@ -75,14 +75,15 @@ secure_sshd() {
   else
     # Secure the configuration.
     echo "Securing the CRYPTO_POLICY."
-    echo -e "CRYPTO_POLICY='\
-        -oCiphers=chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com,aes256-ctr,aes192-ctr,aes128-ctr \
-        -oMACs=hmac-sha2-256-etm@openssh.com,hmac-sha2-512-etm@openssh.com,umac-128-etm@openssh.com \
-        -oGSSAPIKexAlgorithms=gss-curve25519-sha256- \
-        -oKexAlgorithms=curve25519-sha256,curve25519-sha256@libssh.org,diffie-hellman-group16-sha512,diffie-hellman-group18-sha512,diffie-hellman-group-exchange-sha256 \
-        -oHostKeyAlgorithms=ssh-ed25519,ssh-ed25519-cert-v01@openssh.com,rsa-sha2-256,rsa-sha2-512,ssh-rsa-cert-v01@openssh.com \
-        -oPubkeyAcceptedKeyTypes=ssh-ed25519,ssh-ed25519-cert-v01@openssh.com,rsa-sha2-256,rsa-sha2-512,ssh-rsa-cert-v01@openssh.com'" \
-	| sed -e 's/[[:space:]][[:space:]]*-oCipher/-oCipher/' -e 's/[[:space:]][[:space:]]*/ /g' >/etc/ssh/sshd-crypto-policy.txt
+    # Support for crypto-policies, version 20200610.
+    cat >/etc/ssh/sshd-crypto-policy.txt <<-__EOF__
+	Ciphers aes256-gcm@openssh.com,chacha20-poly1305@openssh.com,aes256-ctr,aes128-gcm@openssh.com,aes192-ctr,aes128-ctr
+	MACs hmac-sha2-256-etm@openssh.com,umac-128-etm@openssh.com,hmac-sha2-512-etm@openssh.com
+	GSSAPIKexAlgorithms gss-curve25519-sha256-
+	KexAlgorithms curve25519-sha256,curve25519-sha256@libssh.org,diffie-hellman-group-exchange-sha256,diffie-hellman-group16-sha512,diffie-hellman-group18-sha512
+	HostKeyAlgorithms ssh-ed25519,ssh-ed25519-cert-v01@openssh.com,rsa-sha2-256,rsa-sha2-512,ssh-rsa-cert-v01@openssh.com
+	PubkeyAcceptedKeyTypes ssh-ed25519,ssh-ed25519-cert-v01@openssh.com,rsa-sha2-256,rsa-sha2-512,ssh-rsa-cert-v01@openssh.com
+	__EOF__
     ln -sf /etc/ssh/sshd-crypto-policy.txt ${CRYPTO}
     diff ${CRYPTO}.bak /etc/ssh/sshd-crypto-policy.txt || :
   fi
