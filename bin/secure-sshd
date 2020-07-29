@@ -75,6 +75,7 @@ secure_sshd() {
   else
     # Secure the configuration.
     echo "Securing the CRYPTO_POLICY."
+    # Previous crypto-policies were version 20191128.
     # Support for crypto-policies, version 20200610.
     cat >/etc/ssh/sshd-crypto-policy.txt <<-__EOF__
 	Ciphers aes256-gcm@openssh.com,chacha20-poly1305@openssh.com,aes256-ctr,aes128-gcm@openssh.com,aes192-ctr,aes128-ctr
