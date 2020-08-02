@@ -303,6 +303,12 @@ else
   log "Continuing with custom bootstrap process."
 fi
 
+# If running as LiveOS, enable password-less sudo for admin user.
+if [ -e /run/initramfs/live/LiveOS/squashfs.img ]; then
+  echo "Enabling sudo for admin user."
+  echo "admin    ALL=(ALL)   NOPASSWD: ALL" >/etc/sudoers.d/admin
+fi
+
 # Try to mount first swap device.
 [ -z "$SWAP_MOUNTED" ] && ls /dev/nvme?* >/dev/null 2>&1 && try_swaps nvme?
 [ -z "$SWAP_MOUNTED" ] && ls /dev/xvd*   >/dev/null 2>&1 && try_swaps xvd
