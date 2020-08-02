@@ -12,23 +12,24 @@ fi
 install_bootstrap() {
 
   # Copy the files.  When running under cloud-init, these files should have already been copied.
-  cp -p ./bootstrap.service  /usr/lib/systemd/system/
-  cp -p $PFX/*               /usr/local/bin/
+  cp -p $PFX/bootstrap.service  /usr/lib/systemd/system/
+  cp -p $PFX/bootstrap-*        /usr/local/bin/
+  cp -p $PFX/secure-sshd        /usr/local/bin/
 
   # Set file ownership.
   chown root:root /usr/lib/systemd/system/bootstrap.service
-  chown root:root /usr/local/bin/bootstrap*
+  chown root:root /usr/local/bin/bootstrap-*
   chown root:root /usr/local/bin/secure-sshd
 
   # Set permissions.
   chmod 0644 /usr/lib/systemd/system/bootstrap.service
-  chmod 0755 /usr/local/bin/bootstrap*
+  chmod 0755 /usr/local/bin/bootstrap-*
   chmod 0755 /usr/local/bin/secure-sshd
 
   if command -v restorecon >/dev/null 2>&1 ; then
     # Make sure selinux is happy.
     restorecon  /usr/lib/systemd/system/bootstrap.service
-    restorecon  /usr/local/bin/bootstrap*
+    restorecon  /usr/local/bin/bootstrap-*
     restorecon  /usr/local/bin/secure-sshd
   fi
 
@@ -48,6 +49,8 @@ echo >/var/log/bootstrap-install.log
 PFX="."
 [ -x bin/secure-sshd ] && PFX="bin"
 
+# When running as live media, secure-sshd is not yet executable.
+[ ! -x $PFX/secure-sshd ] && chmod 0755 $PFX/secure-sshd
 $PFX/secure-sshd         | tee -a /var/log/bootstrap-install.log
 # Write the results of securing sshd to the system log so that in a hosted
 # environment (e.g. aws) it can be verified that it ran correctly.  Or, what
