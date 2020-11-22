@@ -11,6 +11,15 @@ fi
 
 cd /root
 
+if ! command -v git >/dev/null ; then
+  echo "Installing git!"
+  INSTALL="yum -y install"
+  command -v dnf     >/dev/null && INSTALL="dnf -y install"
+  command -v apk     >/dev/null && INSTALL="apk -y add"
+  command -v apt-get >/dev/null && INSTALL="apt-get -y install"
+  $INSTALL git
+fi
+
 if [ -x "bootstrap/bin/bootstrap-install" ]; then
   cd bootstrap
   git pull

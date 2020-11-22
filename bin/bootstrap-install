@@ -12,7 +12,7 @@ fi
 install_bootstrap() {
 
   # Copy the files.  When running under cloud-init, these files should have already been copied.
-  cp -p $PFX/bootstrap.service  /usr/lib/systemd/system/
+  cp -p $PFX/../bootstrap.service  /usr/lib/systemd/system/
   cp -p $PFX/bootstrap-*        /usr/local/bin/
   cp -p $PFX/secure-sshd        /usr/local/bin/
 
