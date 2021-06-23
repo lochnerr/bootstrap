@@ -394,8 +394,6 @@ if [ -d /srv/bootstrap ] && [ ! -d /srv/bootstrap/ssh ]; then
   log "Creating persistent ssh host keys."
   mkdir -p /srv/bootstrap/ssh
   cp -p /etc/ssh/ssh_host*    /srv/bootstrap/ssh
-  cp -p /etc/ssh/sshd_config  /srv/bootstrap/ssh
-  [ -e /etc/ssh/sshd-crypto-policy.txt ] && cp -p /etc/ssh/sshd-crypto-policy.txt /srv/bootstrap/ssh
 fi
 
 bind_mount() {
