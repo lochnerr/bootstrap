@@ -5,13 +5,77 @@
 
 set -e
 
-generate_rsa_key() {
+# Set default security values.
+KexAlgorithms='curve25519-sha256,curve25519-sha256@libssh.org,diffie-hellman-group16-sha512,diffie-hellman-group18-sha512,diffie-hellman-group-exchange-sha256'
+Ciphers='chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com,aes256-ctr,aes192-ctr,aes128-ctr'
+MACs='hmac-sha2-256-etm@openssh.com,hmac-sha2-512-etm@openssh.com,umac-128-etm@openssh.com'
 
-  echo "Generating strong rsa key."
-  rm -f /etc/ssh/ssh_host_rsa_key*
-  ssh-keygen -t rsa -b 4096 -f /etc/ssh/ssh_host_rsa_key -N ""
+# These only apply to newer versions of sshd.
+GSSAPIKexAlgorithms='gss-curve25519-sha256-'
+HostKeyAlgorithms='ssh-ed25519,ssh-ed25519-cert-v01@openssh.com,rsa-sha2-256,rsa-sha2-512'
+PubkeyAcceptedKeyTypes='ssh-ed25519,ssh-ed25519-cert-v01@openssh.com,rsa-sha2-256,rsa-sha2-512'
+CASignatureAlgorithms='ssh-ed25519,rsa-sha2-256,rsa-sha2-512'
+
+older_sshd() {
+
+  GSSAPIKexAlgorithms=
+  HostKeyAlgorithms=
+  PubkeyAcceptedKeyTypes=
 }
 
+. /etc/os-release
+
+ID_RELATIVE="$ID"
+[ "$ID" = "centos" ] && ID_FLAVOR="rhel"
+if [ "$ID_RELATIVE" = "ubuntu" ]; then
+  if [ "$VERSION_ID" \< "14" ]; then
+    echo "Error: Unsupported $ID Version ${VERSION_ID}."
+    exit 1
+  fi
+  if [ "$VERSION_ID" \> "20" ]; then
+    # 20.xx +
+    HostKeyAlgorithms='ssh-ed25519,ssh-ed25519-cert-v01@openssh.com,sk-ssh-ed25519@openssh.com,sk-ssh-ed25519-cert-v01@openssh.com,rsa-sha2-256,rsa-sha2-512,rsa-sha2-256-cert-v01@openssh.com,rsa-sha2-512-cert-v01@openssh.com'
+  elif [ "$VERSION_ID" \> "18" ]; then
+    # 18.xx
+    older_sshd
+    KexAlgorithms='curve25519-sha256,curve25519-sha256@libssh.org,diffie-hellman-group16-sha512,diffie-hellman-group18-sha512,diffie-hellman-group-exchange-sha256'
+    HostKeyAlgorithms='ssh-ed25519,ssh-ed25519-cert-v01@openssh.com'
+  else
+    # 14.xx - 16.xx
+    older_sshd
+    KexAlgorithms='curve25519-sha256@libssh.org,diffie-hellman-group-exchange-sha256'
+  fi
+elif [ "$ID_RELATIVE" = "rhel" ]; then
+  if [ "$VERSION_ID" \< "7" ]; then
+    echo "Error: Unsupported $ID Version ${VERSION_ID}."
+    exit 1
+  fi
+  if [ "$VERSION_ID" \< "8" ]; then
+    # 7
+    older_sshd
+    KexAlgorithms='curve25519-sha256,curve25519-sha256@libssh.org,diffie-hellman-group18-sha512,diffie-hellman-group16-sha512,diffie-hellman-group-exchange-sha256'
+  else
+    # 8+
+    true
+  fi
+elif [ "$ID_RELATIVE" = "fedora" ]; then
+  if [ "$VERSION_ID" \< "30" ]; then
+    echo "Error: Unsupported $ID Version ${VERSION_ID}."
+    exit 1
+  fi
+elif [ "$ID_RELATIVE" = "alpine" ]; then
+  # Alpine doesn't support this.
+  GSSAPIKexAlgorithms=
+elif [ "$ID_RELATIVE" = "amzn" ]; then
+  if [ "$VERSION_ID" \< "2" ]; then
+    echo "Error: Unsupported $ID Version ${VERSION_ID}."
+    exit 1
+  fi
+  GSSAPIKexAlgorithms=
+else
+  # Try newer configuration on unknown distros.
+  true
+fi
 
 secure_sshd() {
 
@@ -20,7 +84,8 @@ secure_sshd() {
   # Also tested with Alpine 3.11.
 
   PFX="$1"
-  CFILE="${PFX}/etc/ssh/sshd_config"
+  SSH_DIR="${PFX}/etc/ssh"
+  CFILE="${SSH_DIR}/sshd_config"
   CRYPTO="${PFX}/etc/crypto-policies/back-ends/opensshserver.config"
 
   # Save original config file.
@@ -39,65 +104,144 @@ secure_sshd() {
   fi
 
   # Remove weak host files.
-  rm -f /etc/ssh/ssh_host_dsa_key*
-  rm -f /etc/ssh/ssh_host_ecdsa_key*
+  rm -f ${SSH_DIR}/ssh_host_dsa_key*
+  rm -f ${SSH_DIR}/ssh_host_ecdsa_key*
 
   # Generate a strong rsa key, if needed.
-  if [ ! -e /etc/ssh/ssh_host_rsa_key ]; then
-    generate_rsa_key
-  elif [ "$(ssh-keygen -l -f /etc/ssh/ssh_host_rsa_key | awk '$1 < 4096')" ]; then
-    generate_rsa_key
+  if [ ! -e ${SSH_DIR}/ssh_host_rsa_key ]; then
+    echo "Info: Generating strong RSA key."
+    ssh-keygen -t rsa -b 4096 -f ${SSH_DIR}/ssh_host_rsa_key -N ""
+  elif [ "$(ssh-keygen -l -f ${SSH_DIR}/ssh_host_rsa_key | awk '$1 < 4096')" ]; then
+    echo "Info: Replacing weak RSA key."
+    rm -f ${SSH_DIR}/ssh_host_rsa_key*
+    ssh-keygen -t rsa -b 4096 -f ${SSH_DIR}/ssh_host_rsa_key -N ""
   else
-    echo "RSA key is >= 4096 bits."
+    echo "Info: Keeping existing RSA key >= 4096 bits."
+  fi
+  
+  # Generate a ed25519 key, if needed.
+  if [ ! -e ${SSH_DIR}/ssh_host_ed25519_key ]; then
+    ssh-keygen -t ed25519 -f ${SSH_DIR}/ssh_host_ed25519_key -N ""
   fi
 
   # Update the group ownership and permissions for the keys.
-  if grep ssh_keys /etc/group >/dev/null 2>&1 ; then
-    echo "Updating group ownership and permissions for keys."
-    chgrp ssh_keys /etc/ssh/ssh_host_ed25519_key /etc/ssh/ssh_host_rsa_key
-    chmod g+r /etc/ssh/ssh_host_ed25519_key /etc/ssh/ssh_host_rsa_key
+  if grep ssh_keys ${PFX}/etc/group >/dev/null 2>&1 ; then
+    echo "Info: Updating group ownership and permissions for keys."
+    chgrp ssh_keys ${SSH_DIR}/ssh_host_ed25519_key ${SSH_DIR}/ssh_host_rsa_key
+    chmod g+r ${SSH_DIR}/ssh_host_ed25519_key ${SSH_DIR}/ssh_host_rsa_key
   else
-    echo "Not updating group ownership and permissions for keys."
+    echo "Info: Not updating group ownership and permissions for keys."
   fi
 
   # Clear weak moduli.
-  if [ ! -e /etc/ssh/moduli.bak ]; then
-    echo "Backing up /etc/ssh/moduli file."
-    cp -p /etc/ssh/moduli /etc/ssh/moduli.bak
+  if [ ! -e ${SSH_DIR}/moduli.bak ]; then
+    echo "Info: Backing up ${SSH_DIR}/moduli file."
+    cp -p ${SSH_DIR}/moduli ${SSH_DIR}/moduli.bak
   fi
-  echo "Removing weak moduli entries."
-  awk '$5 >= 3071' /etc/ssh/moduli.bak > /etc/ssh/moduli
+  echo "Info: Removing weak moduli entries."
+  awk '$5 >= 3071' ${SSH_DIR}/moduli.bak > ${SSH_DIR}/moduli
+  BEG="$(wc -l ${SSH_DIR}/moduli.bak | cut -d ' ' -f 1)"
+  END="$(wc -l ${SSH_DIR}/moduli     | cut -d ' ' -f 1)"
+  echo "Info: Removed $(( $BEG - $END )) weak entries."
 
   if [ ! -e ${CRYPTO} ]; then
-    echo "Securing the SSHD config."
-    # Note: GSSAPIKexAlgorithms not supported in Alpine.  This also works with Ubuntu 18.04.
-    sed -i -e '/RekeyLimit.*/ a Ciphers chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com,aes256-ctr,aes192-ctr,aes128-ctr\nMACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com,umac-128-etm@openssh.com\nKexAlgorithms curve25519-sha256,curve25519-sha256@libssh.org,diffie-hellman-group16-sha512,diffie-hellman-group18-sha512,diffie-hellman-group-exchange-sha256\nHostKeyAlgorithms ssh-ed25519,ssh-ed25519-cert-v01@openssh.com,rsa-sha2-256,rsa-sha2-512,ssh-rsa-cert-v01@openssh.com\nPubkeyAcceptedKeyTypes ssh-ed25519,ssh-ed25519-cert-v01@openssh.com,rsa-sha2-256,rsa-sha2-512,ssh-rsa-cert-v01@openssh.com' /etc/ssh/sshd_config
+    echo "Info: Securing the SSHD config."
+    cat >/tmp/80-ssh-audit_hardening.conf <<-__EOD__
+
+	# Restrict key exchange, cipher, and MAC algorithms, as per sshaudit.com
+	# hardening guide for $ID ${VERSION_ID}.
+	KexAlgorithms ${KexAlgorithms}
+	Ciphers ${Ciphers}
+	MACs ${MACs}
+	__EOD__
+
+    [ -n "$HostKeyAlgorithms" ]      && echo "HostKeyAlgorithms ${HostKeyAlgorithms}"            >>/tmp/80-ssh-audit_hardening.conf
+    [ -n "$PubkeyAcceptedKeyTypes" ] && echo "PubkeyAcceptedKeyTypes ${PubkeyAcceptedKeyTypes}"  >>/tmp/80-ssh-audit_hardening.conf
+    [ -n "$GSSAPIKexAlgorithms" ]    && echo "GSSAPIKexAlgorithms ${GSSAPIKexAlgorithms}"        >>/tmp/80-ssh-audit_hardening.conf
   else
     # Secure the configuration.
-    echo "Securing the CRYPTO_POLICY."
+    echo "Info: Securing the CRYPTO_POLICY."
     # Previous crypto-policies were version 20191128.
     # Support for crypto-policies, version 20200610.
-    cat >/etc/ssh/sshd-crypto-policy.txt <<-__EOF__
-	Ciphers aes256-gcm@openssh.com,chacha20-poly1305@openssh.com,aes256-ctr,aes128-gcm@openssh.com,aes192-ctr,aes128-ctr
-	MACs hmac-sha2-256-etm@openssh.com,umac-128-etm@openssh.com,hmac-sha2-512-etm@openssh.com
-	GSSAPIKexAlgorithms gss-curve25519-sha256-
-	KexAlgorithms curve25519-sha256,curve25519-sha256@libssh.org,diffie-hellman-group-exchange-sha256,diffie-hellman-group16-sha512,diffie-hellman-group18-sha512
-	HostKeyAlgorithms ssh-ed25519,ssh-ed25519-cert-v01@openssh.com,rsa-sha2-256,rsa-sha2-512,ssh-rsa-cert-v01@openssh.com
-	PubkeyAcceptedKeyTypes ssh-ed25519,ssh-ed25519-cert-v01@openssh.com,rsa-sha2-256,rsa-sha2-512,ssh-rsa-cert-v01@openssh.com
+    if ! grep -i CRYPTO_POLICY /usr/share/crypto-policies/DEFAULT/opensshserver.txt >/dev/null 2>&1 ; then
+      # Format starting with Fedora 32.
+      cat >${SSH_DIR}/sshd-crypto-policy.txt <<-__EOF__
+	# Restrict key exchange, cipher, and MAC algorithms, as per sshaudit.com
+	# hardening guide for $ID ${VERSION_ID}.
+	Ciphers ${Ciphers}
+	MACs ${MACs}
+	GSSAPIKexAlgorithms ${GSSAPIKexAlgorithms}
+	KexAlgorithms ${KexAlgorithms}
+	HostKeyAlgorithms ${HostKeyAlgorithms}
+	PubkeyAcceptedKeyTypes ${PubkeyAcceptedKeyTypes}
+	CASignatureAlgorithms ${CASignatureAlgorithms}
 	__EOF__
-    ln -sf /etc/ssh/sshd-crypto-policy.txt ${CRYPTO}
-    diff ${CRYPTO}.bak /etc/ssh/sshd-crypto-policy.txt || :
+    else
+      # Format prior to Fedora 32.
+      echo "CRYPTO_POLICY='-oCiphers=${Ciphers} -oMACs=${MACs} -oGSSAPIKexAlgorithms=${GSSAPIKexAlgorithms} -oKexAlgorithms=${KexAlgorithms} -oHostKeyAlgorithms=${HostKeyAlgorithms} -oPubkeyAcceptedKeyTypes=${PubkeyAcceptedKeyTypes} -oCASignatureAlgorithms=${CASignatureAlgorithms}'" >${SSH_DIR}/sshd-crypto-policy.txt
+    fi
+    ln -sf ${SSH_DIR}/sshd-crypto-policy.txt ${CRYPTO}
+    diff ${CRYPTO}.bak ${SSH_DIR}/sshd-crypto-policy.txt || :
   fi
 
-  # Fixup other configuration options.
-  sed -i \
-   -e 's/^[[:space:]]*#*[[:space:]]*LogLevel.*/LogLevel VERBOSE/' \
-   -e 's/^[[:space:]]*#*[[:space:]]*PermitRootLogin.*/PermitRootLogin forced-commands-only/' \
-   -e 's:^[[:space:]]*#*[[:space:]]*Subsystem[[:space:]]*sftp.*:Subsystem sftp\t/usr/libexec/openssh/sftp-server -f AUTHPRIV -l INFO:' \
-   -e 's/^[[:space:]]*HostKey \/etc\/ssh\/ssh_host_ecdsa_key$/\#HostKey \/etc\/ssh\/ssh_host_ecdsa_key/g' \
-   $CFILE || :
+  if [ -d ${SSH_DIR}/sshd_config.d ]; then
+    # If there is a sshd_config.d directory, add a config files to it.
+    # TODO Not sure about this.
+    echo "Info: Creating ${SSH_DIR}/sshd_config.d/90-2fa.conf file."
+    cat >${SSH_DIR}/sshd_config.d/90-2fa.DELETE <<-__EOD__
+	#PasswordAuthentication no
+	ChallengeResponseAuthentication yes
+	AuthenticationMethods publickey,password publickey,keyboard-interactive
+	__EOD__
+
+    echo "Info: Adding additional settings to 80-ssh-audit_hardening.conf file."
+    cat >>/tmp/80-ssh-audit_hardening.conf <<-__EOD__
+
+	LogLevel VERBOSE
+	PermitRootLogin forced-commands-only
+	PrintLastLog yes
+	Subsystem sftp	/usr/libexec/openssh/sftp-server -f AUTHPRIV -l INFO
+	HostKey ${SSH_DIR}/ssh_host_rsa_key
+	HostKey ${SSH_DIR}/ssh_host_ed25519_key
+	__EOD__
+
+    echo "Info: Adding 80-ssh-audit_hardening.conf to ${SSH_DIR}/sshd_config.d/ directory."
+    mv -f /tmp/80-ssh-audit_hardening.conf ${SSH_DIR}/sshd_config.d/
+    cat ${SSH_DIR}/sshd_config.d/80-ssh-audit_hardening.conf
+
+    if grep '^[[:space:]]*Subsystem.*sftp' $CFILE >/dev/null 2>&1 ; then
+      echo "Info: Disabling duplicate active subsystem sftp in $CFILE file."
+      sed -i -e 's/^[[:space:]]*Subsystem[[:space:]]*sftp/#Subsystem\tsftp/' $CFILE || :
+    fi
+  else
+    # Otherwise, the changes will be made inline to the sshd_config file.
+    if [ ! -e ${SSH_DIR}/sshd_config.bak ]; then
+      echo "Info: Creating ${SSH_DIR}/sshd_config.bak file."
+      cp -p ${SSH_DIR}/sshd_config ${SSH_DIR}/sshd_config.bak
+    fi
+    sed -i \
+     -e 's/^[[:space:]]*#*[[:space:]]*LogLevel.*/LogLevel VERBOSE/' \
+     -e 's/^[[:space:]]*#*[[:space:]]*PermitRootLogin.*/PermitRootLogin forced-commands-only/' \
+     -e 's:^[[:space:]]*#*[[:space:]]*Subsystem[[:space:]]*sftp.*:Subsystem sftp\t/usr/libexec/openssh/sftp-server -f AUTHPRIV -l INFO:' \
+     -e 's/^[[:space:]]*HostKey/#HostKey/g' \
+     $CFILE || :
+    echo "HostKey ${SSH_DIR}/ssh_host_rsa_key" >>$CFILE
+    echo "HostKey ${SSH_DIR}/ssh_host_ed25519_key" >>$CFILE
+
+    if [ -e /tmp/80-ssh-audit_hardening.conf ]; then
+      echo "Info: Updating ${SSH_DIR}/sshd_config file with algorithm settings."
+      cat /tmp/80-ssh-audit_hardening.conf >>${SSH_DIR}/sshd_config
+    fi
+  fi
+
   # Show the changes to the config.
   diff ${CFILE}.bak ${CFILE} || :
+
+  # Create run directory.  Needed for container testing.
+  mkdir -p /run/sshd
+
+  # Test the configuration.
+  /usr/sbin/sshd -t || :
 
   if [ ! -x /sbin/apk ]; then
     # Restart the ssh daemon.
