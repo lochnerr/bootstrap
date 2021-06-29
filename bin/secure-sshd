@@ -268,6 +268,10 @@ secure_sshd() {
     fi
   else
     echo "Warning: Not restarting sshd daemon (No init system)."
+    # There is little reason to run an sshd without an init system.
+    # Display the running processes.
+    ps aux
+    echo "===="
   fi
 
   echo "$0 Done!"

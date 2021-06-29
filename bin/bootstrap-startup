@@ -257,6 +257,13 @@ find_and_copy_bootstrap_files() {
   elif ls /dev/sd* 2>/dev/null >/dev/null; then
     log "VM kvm sd"
     rv="$(try_device_node sd)"
+  elif ls /srv/bootstrap 2>/dev/null >/dev/null; then
+    log "VM already mounted /srv/bootstrap directory."
+    cp -a /srv/bootstrap /tmp
+    # Create mount script for use in shutdown (to persist network changes)."
+    echo "#!/bin/sh" >/tmp/mount-bootstrap
+    chmod +x /tmp/mount-bootstrap
+    rv="0"
   else
     log "No bootstrap device found."
   fi
