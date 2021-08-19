@@ -423,6 +423,16 @@ bind_mount() {
 # Mount persistent root.
 bind_mount root
 
+# Add new users to the persistent home directory.
+# This can happen if an existing bootstrap configuration is used on a clean cloud image and the
+# user-data specifies new users.
+for user in $(ls /home) ; do
+  if [ ! -d "/srv/home/$user" ]; then
+    echo "Adding user $user to persistent home directory."
+    cp -a /home/$user /srv/home/
+  fi
+done
+
 # Mount persistent home.
 bind_mount home
 
@@ -557,9 +567,9 @@ wait_for_internet() {
 
 restart_network() {
 
-  if systemctl is-active --quiet NetworkManager ; then
+  if ! systemctl is-active --quiet NetworkManager ; then
     systemctl restart NetworkManager
-  elif systemctl is-active --quiet systemd-networkd ; then
+  elif ! systemctl is-active --quiet systemd-networkd ; then
     systemctl restart systemd-networkd
   else
     log "Warning: Don't know how to restart networking."
