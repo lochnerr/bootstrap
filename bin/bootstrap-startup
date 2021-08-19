@@ -428,8 +428,8 @@ bind_mount root
 # user-data specifies new users.
 for user in $(ls /home) ; do
   if [ ! -d "/srv/home/$user" ]; then
-    echo "Adding user $user to persistent home directory."
-    cp -a /home/$user /srv/home/
+    log "Adding user $user to persistent home directory."
+    mv /home/$user /srv/home/
   fi
 done
 
