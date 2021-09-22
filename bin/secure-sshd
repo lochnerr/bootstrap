@@ -195,14 +195,6 @@ secure_sshd() {
   fi
 
   if [ -d ${SSH_DIR}/sshd_config.d ]; then
-    # If there is a sshd_config.d directory, add a config files to it.
-    # TODO Not sure about this.
-    echo "Info: Creating ${SSH_DIR}/sshd_config.d/90-2fa.conf file."
-    cat >${SSH_DIR}/sshd_config.d/90-2fa.DELETE <<-__EOD__
-	#PasswordAuthentication no
-	ChallengeResponseAuthentication yes
-	AuthenticationMethods publickey,password publickey,keyboard-interactive
-	__EOD__
 
     echo "Info: Adding additional settings to 80-ssh-audit_hardening.conf file."
     cat >>/tmp/80-ssh-audit_hardening.conf <<-__EOD__

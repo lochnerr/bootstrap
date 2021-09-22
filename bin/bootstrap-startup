@@ -315,6 +315,11 @@ fi
 if [ -e /run/initramfs/live/LiveOS/squashfs.img ]; then
   echo "Enabling sudo for admin user."
   echo "admin    ALL=(ALL)   NOPASSWD: ALL" >/etc/sudoers.d/admin
+  # live-xen-fedora builds do not enable NetworkManager.
+  # This allows network-scripts to be copied prior to starting the network.
+  # But, if there are no network-scripts, it will not be started.
+  # This forces all live-xen-fedora builds to start networking.
+  NETWORK_RECONFIGURED="true"
 fi
 
 # Try to mount first swap device.
@@ -477,12 +482,87 @@ if [ -e /etc/ssh/sshd-crypto-policy.txt ]; then
   fi
 fi
 
+enable_google_authenticator() {
+
+  if [ ! -e /etc/pam.d/sshd ]; then
+    log "Warning: File /etc/pam.d/sshd does not exist, not enabling google authenticator."
+    return
+  fi
+
+  if [ ! -d /etc/ssh/sshd_config.d ]; then
+    log "Warning: Directory /etc/ssh/sshd_config.d does not exist, not enabling google authenticator."
+    return
+  fi
+
+  if [ ! -e /etc/ssh/90-2fa.tmpl ]; then
+    log "Info: Creating file /etc/ssh/90-2fa.tmpl."
+    cat >/etc/ssh/90-2fa.tmpl <<-__EOF__
+	# Public key plus Google Authenticator configuration.
+	# This works on both Fedora 34 and ubuntu 20.04.
+	PasswordAuthentication yes
+	KbdInteractiveAuthentication yes
+	ChallengeResponseAuthentication yes
+	AuthenticationMethods publickey,password publickey,keyboard-interactive
+	__EOF__
+  fi
+
+  SSHD_RESTART="true"
+
+  log "Adding google_authenticator configuration to /etc/ssh/sshd_config.d/90-2fa.conf."
+  rm -f /etc/ssh/sshd_config.d/90-2fa.conf
+  ln -s /etc/ssh/90-2fa.tmpl /etc/ssh/sshd_config.d/90-2fa.conf
+
+  if [ ! -e /etc/pam-sshd.bak ]; then
+    log "Backing up /etc/pam.d/sshd to /etc/pam-sshd.bak."
+    cp -p /etc/pam.d/sshd /etc/pam-sshd.bak
+  fi
+
+  # Restore the original pam sshd configuration.
+  cp -p /etc/pam-sshd.bak /etc/pam.d/sshd
+
+  # Fixup the pam sshd configuration for google authenticator.
+  sed -i \
+    -e '/^@include.*common-auth/ d' \
+    -e 's/^auth.*substack.*password-auth/#auth       substack     password-auth/' \
+    /etc/pam.d/sshd
+
+  # Only add google authenticator entry if it's not already set.
+  if ! grep "pam_google_authenticator\.so" /etc/pam.d/sshd >/dev/null 2>&1 ; then
+    cat >>/etc/pam.d/sshd <<-__EOF__
+	# Two-factor authentication.
+	auth sufficient pam_google_authenticator.so secret=/home/\${USER}/.ssh/.google_authenticator nullok
+	__EOF__
+  fi
+
+  log "Changes to pam sshd configuration."
+  msg="$(diff /etc/pam-sshd.bak /etc/pam.d/sshd  || :)"
+  log "$msg"
+}
+
+# Disable 2-factor authentication for now.
+if [ -L /etc/ssh/sshd_config.d/90-2fa.conf ]; then
+  log "Removing symbolic link /etc/ssh/sshd_config.d/90-2fa.conf."
+  rm /etc/ssh/sshd_config.d/90-2fa.conf
+fi
+
+# If a .google_authenticator file is in any users home or home/.ssh directory,
+# enable  2-factor authentication.
+AUTHENTICATOR="false"
+for user in $(ls /home) ; do
+  [ -e "/home/${user}/.google_authenticator"      ] && AUTHENTICATOR="true"
+  [ -e "/home/${user}/.ssh/.google_authenticator" ] && AUTHENTICATOR="true"
+done
+if [ "$AUTHENTICATOR" = "true" ]; then
+  log "Enabling 2-factor authentication."
+  enable_google_authenticator
+fi
+
 # Ensure proper host key permissions.
 chmod 600 /etc/ssh/ssh_host*
 chmod 644 /etc/ssh/ssh_host*.pub
 
 # Restart sshd?
-if [ $SSHD_RESTART = "true" ]; then
+if [ "$SSHD_RESTART" = "true" ]; then
   log "Restarting ssh daemon."
   if [ -x /sbin/setup-alpine ]; then
     /etc/init.d/sshd restart
