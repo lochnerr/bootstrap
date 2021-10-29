@@ -260,10 +260,7 @@ secure_sshd() {
     fi
   else
     echo "Warning: Not restarting sshd daemon (No init system)."
-    # There is little reason to run an sshd without an init system.
-    # Display the running processes.
-    ps aux
-    echo "===="
+    # This will happen in a live-xen build.  It is executed in an anaconda kickstart.
   fi
 
   echo "$0 Done!"

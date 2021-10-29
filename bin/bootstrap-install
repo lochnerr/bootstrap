@@ -12,9 +12,11 @@ fi
 install_bootstrap() {
 
   # Copy the files.  When running under cloud-init, these files should have already been copied.
-  cp -p $PFX/../bootstrap.service  /usr/lib/systemd/system/
-  cp -p $PFX/bootstrap-*        /usr/local/bin/
-  cp -p $PFX/secure-sshd        /usr/local/bin/
+  if [ ! -e /usr/local/bin/bootstrap-startup ]; then
+    cp -p $PFX/../bootstrap.service  /usr/lib/systemd/system/
+    cp -p $PFX/bootstrap-*        /usr/local/bin/
+    cp -p $PFX/secure-sshd        /usr/local/bin/
+  fi
 
   # Set file ownership.
   chown root:root /usr/lib/systemd/system/bootstrap.service
@@ -46,8 +48,7 @@ install_bootstrap() {
 echo >/var/log/bootstrap-install.log
 
 # Determine the source directory.
-PFX="."
-[ -x bin/secure-sshd ] && PFX="bin"
+PFX="$(dirname $0)"
 
 # When running as live media, secure-sshd is not yet executable.
 [ ! -x $PFX/secure-sshd ] && chmod 0755 $PFX/secure-sshd
