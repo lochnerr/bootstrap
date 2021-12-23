@@ -191,7 +191,7 @@ try_lvs() {
   fi
   log "$msg"
   if [ ! -z "$(command -v lvs 2> /dev/null)" ]; then
-    local scan="$(lvs --noheadings -o vg_name,lv_name,lv_attr | grep $inverse $1 || :)"
+    local scan="$(lvs --noheadings -o vg_name,lv_name,lv_attr | sort | grep $inverse [[:space:]]*$1 || :)"
     local rv=""
     if [ -n "$scan" ]; then
       rv=$(process_lv $scan)
@@ -215,8 +215,6 @@ do_bare_metal() {
   # Try disk partitions.
   [ -z "$rv" ] && rv="$(try_device_node nvme?)"
   [ -z "$rv" ] && rv="$(try_device_node sd)"
-  # Try all other logical volumes.
-  [ -z "$rv" ] && rv="$(try_lvs bootstrap inverse)"
   if [ -z "$rv" ] && [ -d /srv/bootstrap ]; then
     log "Directory /srv/bootstrap exists."
     cp -a /srv/bootstrap /tmp
@@ -309,6 +307,12 @@ if [ "$MODE" = "standard"  ]; then
   log "Continuing with standard bootstrap process."
 else
   log "Continuing with custom bootstrap process."
+fi
+
+# The root account is sometimes open with no password. If it is, lock it.
+if grep '^root::' /etc/shadow ; then
+  log "Locking unlocked root account."
+  sed -i 's/^root::/root:!locked:/' /etc/shadow
 fi
 
 # If running as LiveOS, enable password-less sudo for admin user.
