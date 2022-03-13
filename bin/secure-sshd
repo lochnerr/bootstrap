@@ -82,10 +82,36 @@ else
   true
 fi
 
+set_banner() {
+
+  if [ -z "${ENTITY}" ]; then
+    echo "Warning: No ENTITY value set, skipping banner."
+  else
+    echo "Info: Setting SSH Banner."
+    cat >$SSH_DIR/logon_banner <<-EOD
+
+	#######################################################################################################################
+	# All communications and data transiting, traveling to or from, or stored on this system will be monitored. You
+	# consent to the unrestricted monitoring, interception, recording, and searching of all communications and
+	# data transiting, traveling to or from, or stored on this system at any time and for any purpose by
+	# ${ENTITY} and by any person or entity, including government entities, authorized by
+	# ${ENTITY}. You also consent to the unrestricted disclosure of all communications and data
+	# transiting, traveling to or from, or stored on this system at any time and for any purpose to any person or entity,
+	# including government entities, authorized by ${ENTITY}. You are acknowledging that you have no
+	# reasonable expectation of privacy regarding your use of this system. These acknowledgments and consents cover
+	# all use of the system, including work-related use and personal use without exception.
+	#######################################################################################################################
+
+	EOD
+    sed -i "s:#Banner.*:Banner $SSH_DIR/logon_banner:" $1
+  fi
+}
+
 secure_sshd() {
 
   # Secure sshd configuration.
 
+  ENTITY="Clone Research Corporation"
   SSH_DIR="/etc/ssh"
   CFILE="${SSH_DIR}/sshd_config"
   CRYPTO="/etc/crypto-policies/back-ends/opensshserver.config"
@@ -205,9 +231,11 @@ secure_sshd() {
 	Subsystem sftp	/usr/libexec/openssh/sftp-server -f AUTHPRIV -l INFO
 	HostKey ${SSH_DIR}/ssh_host_rsa_key
 	HostKey ${SSH_DIR}/ssh_host_ed25519_key
+	#Banner none
 	__EOD__
 
     echo "Info: Adding 80-ssh-audit_hardening.conf to ${SSH_DIR}/sshd_config.d/ directory."
+    set_banner /tmp/80-ssh-audit_hardening.conf
     mv -f /tmp/80-ssh-audit_hardening.conf ${SSH_DIR}/sshd_config.d/
     cat ${SSH_DIR}/sshd_config.d/80-ssh-audit_hardening.conf
 
@@ -233,6 +261,7 @@ secure_sshd() {
     if [ -e /tmp/80-ssh-audit_hardening.conf ]; then
       echo "Info: Updating ${SSH_DIR}/sshd_config file with algorithm settings."
       cat /tmp/80-ssh-audit_hardening.conf >>${SSH_DIR}/sshd_config
+      set_banner ${SSH_DIR}/sshd_config
     fi
   fi
 
