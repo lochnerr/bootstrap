@@ -309,10 +309,6 @@ else
   log "Continuing with custom bootstrap process."
 fi
 
-# Testing with qemu/kvm, no sensors are available, so stop the thermal daemon.
-res="$(journalctl -b-0 | grep "No thermal sensors found" 2>/dev/null || :)"
-[ -n "$res" ] && systemctl stop thermald
-
 # The root account is sometimes open with no password. If it is, lock it.
 if grep '^root::' /etc/shadow ; then
   log "Locking unlocked root account."
