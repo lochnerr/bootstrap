@@ -224,6 +224,13 @@ secure_sshd() {
     diff ${CRYPTO}.bak ${SSH_DIR}/sshd-crypto-policy.txt || :
   fi
 
+  # Debian
+  SFTP="/usr/lib/openssh/sftp-server"
+  # Fedora
+  [ -e /usr/libexec/openssh/sftp-server ] && SFTP="/usr/libexec/openssh/sftp-server"
+  # Alpine
+  [ -e /usr/lib/ssh/sftp-server ] && SFTP="/usr/lib/ssh/sftp-server"
+
   if [ -d ${SSH_DIR}/sshd_config.d ]; then
 
     echo "Info: Adding additional settings to 80-ssh-audit_hardening.conf file."
@@ -232,21 +239,23 @@ secure_sshd() {
 	LogLevel VERBOSE
 	PermitRootLogin forced-commands-only
 	PrintLastLog yes
-	Subsystem sftp	/usr/libexec/openssh/sftp-server -f AUTHPRIV -l INFO
+	#Subsystem sftp	$SFTP
 	HostKey ${SSH_DIR}/ssh_host_rsa_key
 	HostKey ${SSH_DIR}/ssh_host_ed25519_key
 	#Banner none
 	__EOD__
 
+    if grep '^[[:space:]]*Subsystem.*sftp' $CFILE >/dev/null 2>&1 ; then
+      echo "Info: Subsystem sftp already active in $CFILE file."
+    else
+      echo "Info: Enabling subsystem sftp in 80-ssh-audit_hardening.conf."
+      sed -i -e 's/#Subsystem/Subsystem/' /tmp/80-ssh-audit_hardening.conf
+    fi
+
     echo "Info: Adding 80-ssh-audit_hardening.conf to ${SSH_DIR}/sshd_config.d/ directory."
     set_banner /tmp/80-ssh-audit_hardening.conf
     mv -f /tmp/80-ssh-audit_hardening.conf ${SSH_DIR}/sshd_config.d/
     cat ${SSH_DIR}/sshd_config.d/80-ssh-audit_hardening.conf
-
-    if grep '^[[:space:]]*Subsystem.*sftp' $CFILE >/dev/null 2>&1 ; then
-      echo "Info: Disabling duplicate active subsystem sftp in $CFILE file."
-      sed -i -e 's/^[[:space:]]*Subsystem[[:space:]]*sftp/#Subsystem\tsftp/' $CFILE || :
-    fi
   else
     # Otherwise, the changes will be made inline to the sshd_config file.
     if [ ! -e ${SSH_DIR}/sshd_config.bak ]; then
@@ -256,7 +265,7 @@ secure_sshd() {
     sed -i \
      -e 's/^[[:space:]]*#*[[:space:]]*LogLevel.*/LogLevel VERBOSE/' \
      -e 's/^[[:space:]]*#*[[:space:]]*PermitRootLogin.*/PermitRootLogin forced-commands-only/' \
-     -e 's:^[[:space:]]*#*[[:space:]]*Subsystem[[:space:]]*sftp.*:Subsystem sftp\t/usr/libexec/openssh/sftp-server -f AUTHPRIV -l INFO:' \
+     -e "s:^[[:space:]]*#*[[:space:]]*Subsystem[[:space:]]*sftp.*:Subsystem sftp\t$SFTP:" \
      -e 's/^[[:space:]]*HostKey/#HostKey/g' \
      $CFILE || :
     echo "HostKey ${SSH_DIR}/ssh_host_rsa_key" >>$CFILE
