@@ -254,7 +254,8 @@ secure_sshd() {
 
     echo "Info: Adding 80-ssh-audit_hardening.conf to ${SSH_DIR}/sshd_config.d/ directory."
     set_banner /tmp/80-ssh-audit_hardening.conf
-    mv -f /tmp/80-ssh-audit_hardening.conf ${SSH_DIR}/sshd_config.d/
+    # The following previously was a mv, but it messed up SELinux context.
+    cp /tmp/80-ssh-audit_hardening.conf ${SSH_DIR}/sshd_config.d/80-ssh-audit_hardening.conf
     cat ${SSH_DIR}/sshd_config.d/80-ssh-audit_hardening.conf
   else
     # Otherwise, the changes will be made inline to the sshd_config file.

@@ -252,14 +252,16 @@ find_and_copy_bootstrap_files() {
     # NVME device mounted on root.
     log "VM AWS Nitro 2"
     rv="$(try_device_node nvme?)"
+  elif ls /dev/vd* 2>/dev/null >/dev/null; then
+    # This test has been moved before the /dev/kvm test because of nested virtualization.
+    # If the system has /dev/vd* devices, it is a kvm vm, period.
+    log "VM kvm vd"
+    rv="$(try_device_node vd)"
   elif [ -e /dev/kvm ]; then
     # If the /dev/kvm device exists, this is a KVM host.
     log "KVM Host."
     rm /tmp/skip_network_reconfig
     rv="$(do_bare_metal kernel)"
-  elif ls /dev/vd* 2>/dev/null >/dev/null; then
-    log "VM kvm vd"
-    rv="$(try_device_node vd)"
   elif ls /dev/sd* 2>/dev/null >/dev/null; then
     log "VM kvm sd"
     rv="$(try_device_node sd)"
@@ -438,7 +440,11 @@ bind_mount root
 for user in $(ls /home) ; do
   if [ ! -d "/srv/home/$user" ]; then
     log "Adding user $user to persistent home directory."
-    mv /home/$user /srv/home/
+    if [ ! -d "/srv/home" ]; then
+      echo "Creating /srv/home directory."
+      mkdir -p /srv/home
+    fi
+    cp -a /home/$user /srv/home/
   fi
 done
 
