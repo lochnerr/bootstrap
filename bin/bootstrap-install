@@ -49,6 +49,8 @@ echo >/var/log/bootstrap-install.log
 
 # Determine the source directory.
 PFX="$(dirname $0)"
+echo "Info: Working Directory is: $(pwd)."  >>/var/log/bootstrap-install.log
+echo "Info: Source Directory is:  ${PFX}."  >>/var/log/bootstrap-install.log
 
 # When running as live media, secure-sshd is not yet executable.
 [ ! -x $PFX/secure-sshd ] && chmod 0755 $PFX/secure-sshd
