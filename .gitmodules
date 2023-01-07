@@ -1,0 +1,3 @@
+[submodule "secure-sshd"]
+	path = secure-sshd
+	url = git@github.com:lochnerr/secure-sshd.git

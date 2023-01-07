@@ -1,1 +1,1 @@
-../../secure-sshd/bin/enable-authenticator-if-needed
+../secure-sshd/bin/enable-authenticator-if-needed
