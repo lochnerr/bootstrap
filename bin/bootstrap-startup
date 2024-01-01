@@ -248,7 +248,7 @@ find_and_copy_bootstrap_files() {
     # This apppears to only apply to AWS Linux 2 instances.
     log "VM AWS Nitro"
     rv="$(try_device_node nvme?)"
-  elif [ -n "$(mount | grep "^/dev/nvme0n1p1 on / " || :)" ]; then
+  elif [ -n "$(mount | grep '^/dev/nvme0n1p. on / ' || :)" ]; then
     # NVME device mounted on root.
     log "VM AWS Nitro 2"
     rv="$(try_device_node nvme?)"

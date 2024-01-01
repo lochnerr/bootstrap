@@ -22,10 +22,14 @@ fi
 
 if [ -x "bootstrap/bin/bootstrap-install" ]; then
   cd bootstrap
-  git pull --recurse-submodules
+  git pull
+  cd secure-sshd
+  git pull
+  cd ..
 else
-  git clone --recurse-submodules https://github.com/lochnerr/bootstrap.git
+  git clone https://github.com/lochnerr/bootstrap.git
   cd bootstrap
+  git clone https://github.com/lochnerr/secure-sshd.git
 fi
 
 bin/bootstrap-install
