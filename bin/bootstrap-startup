@@ -229,6 +229,13 @@ do_bare_metal() {
 
 find_and_copy_bootstrap_files() {
   local rv
+  # Check for AWS root volume on nvme to avoid not identifying bare metal on nvme.
+  # See: https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/identify_ec2_instances.html
+  grep "^i-" /sys/devices/virtual/dmi/id/board_asset_tag >/dev/null 2>&1 && awsnvme="true"
+  sudo dmidecode --string system-uuid | grep -i "^ec2"   >/dev/null 2>&1 && awsnvme="true"
+  grep -i "^ec2" /sys/hypervisor/uuid                    >/dev/null 2>&1 && awsnvme="true"
+  # If root not on nvme then this is reset flag.
+  mount | grep '^/dev/nvme0n1p. on / '                   >/dev/null 2>&1 || awsnvme="false"
   # See: https://wiki.xenproject.org/wiki/Xen_FAQ_Dom0#How_do_I_tell_if_I.27m_running_in_a_dom0_or_a_domU.3F
   # Note the comment: Some domUs will have the file and some will not.
   touch /tmp/skip_network_reconfig
@@ -248,7 +255,7 @@ find_and_copy_bootstrap_files() {
     # This apppears to only apply to AWS Linux 2 instances.
     log "VM AWS Nitro"
     rv="$(try_device_node nvme?)"
-  elif [ -n "$(mount | grep '^/dev/nvme0n1p. on / ' || :)" ]; then
+  elif [ "$awsnvme" = "true" ]; then
     # NVME device mounted on root.
     log "VM AWS Nitro 2"
     rv="$(try_device_node nvme?)"
@@ -431,25 +438,31 @@ bind_mount() {
   fi
 }
 
-# Mount persistent root.
-bind_mount root
 
-# Add new users to the persistent home directory.
-# This can happen if an existing bootstrap configuration is used on a clean cloud image and the
-# user-data specifies new users.
-for user in $(ls /home) ; do
-  if [ ! -d "/srv/home/$user" ]; then
-    log "Adding user $user to persistent home directory."
-    if [ ! -d "/srv/home" ]; then
-      echo "Creating /srv/home directory."
-      mkdir -p /srv/home
+
+# Only want to bind mount these directories if there was a physical volume mounted on /srv.
+# This is indicated by the existence of the mount-bootstrap script file.
+if [ -x /tmp/mount-bootstrap ]; then
+  # Mount persistent root.
+  bind_mount root
+
+  # Add new users to the persistent home directory.
+  # This can happen if an existing bootstrap configuration is used on a clean cloud image and the
+  # user-data specifies new users.
+  for user in $(ls /home) ; do
+    if [ ! -d "/srv/home/$user" ]; then
+      log "Adding user $user to persistent home directory."
+      if [ ! -d "/srv/home" ]; then
+        echo "Creating /srv/home directory."
+        mkdir -p /srv/home
+      fi
+      cp -a /home/$user /srv/home/
     fi
-    cp -a /home/$user /srv/home/
-  fi
-done
+  done
 
-# Mount persistent home.
-bind_mount home
+  # Mount persistent home.
+  bind_mount home
+fi
 
 copyifdifferent() {
 
